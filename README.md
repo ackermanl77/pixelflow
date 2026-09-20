@@ -62,6 +62,14 @@ project root in dev, next to `PixelFlow.exe` when packaged) — see
 `docs/PROJECT_STATUS.md`'s note on `backend/paths.py` for why those two
 locations differ.
 
+**Or let CI build it for you**: pushing a tag like `v0.1.0` triggers
+`.github/workflows/release.yml`, which runs this exact same script on a
+`windows-latest` runner and attaches `PixelFlow-<version>-Windows.7z` + its
+`.sha256` to a new GitHub Release, plus keeps them as a build artifact on the
+workflow run either way. It can also be run on demand (Actions tab →
+"Release Build" → "Run workflow", enter a version) without needing a tag
+push or a real release at all, which just builds and uploads the artifact.
+
 ## Nodes included
 
 - **loaders**: Load Checkpoint (stub), Load Image

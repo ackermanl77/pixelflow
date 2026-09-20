@@ -1,0 +1,80 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version number to build (e.g. 0.1.0) -- no leading 'v'"
+        required: true
+        default: "0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements-desktop.txt
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $version = "${{ github.event.inputs.version }}"
+          } else {
+            # A tag push looks like "refs/tags/v0.1.0" -- strip the "v" prefix so both trigger
+            # paths hand build_release.ps1 the same bare "0.1.0" shape it already expects.
+            $version = "${{ github.ref_name }}" -replace '^v', ''
+          }
+          "value=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Ensure 7-Zip is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command 7z -ErrorAction SilentlyContinue) -and -not (Test-Path "C:\Program Files\7-Zip\7z.exe")) {
+            choco install 7zip -y --no-progress
+          }
+          # build_release.ps1 looks for "7z" via Get-Command, which only sees what's already on
+          # PATH in *this* process -- a fresh choco install above needs this added explicitly so
+          # the later build step (a separate step, separate process) can find it too.
+          "C:\Program Files\7-Zip" >> $env:GITHUB_PATH
+
+      # Same steps scripts/build_release.ps1 already runs for a local release build: install
+      # requirements.txt + requirements-desktop.txt, PyInstaller, bundle the (freshly downloaded,
+      # since this runner has no sibling-project cache to reuse) WebView2 Fixed Version runtime,
+      # then archive to .7z + write its .sha256 sidecar -- this workflow is deliberately just "run
+      # the same script in CI" (see that script's own comments for why each piece exists).
+      - name: Build release
+        shell: pwsh
+        run: .\scripts\build_release.ps1 -Version "${{ steps.version.outputs.value }}"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PixelFlow-${{ steps.version.outputs.value }}-Windows
+          path: |
+            PixelFlow-*-Windows.7z
+            PixelFlow-*-Windows.7z.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            PixelFlow-*-Windows.7z PixelFlow-*-Windows.7z.sha256 `
+            --title "PixelFlow ${{ github.ref_name }}" `
+            --generate-notes

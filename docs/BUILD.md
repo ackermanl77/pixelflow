@@ -31,7 +31,26 @@ WebView2 Runtime (the normal "Evergreen" one that ships with Windows 10/11
 and auto-updates). That's fine for testing on this machine. For a build you
 intend to hand to someone else, use the full release script below instead.
 
-## Full release build
+## CI: building automatically
+
+You don't have to run the release script by hand. `.github/workflows/release.yml`
+(mirroring `photo_professional_tool`'s own release workflow) runs the exact
+same `scripts\build_release.ps1` on a GitHub-hosted `windows-latest` runner:
+
+- **Push a version tag** (`git tag v0.1.0 && git push origin v0.1.0`) to build
+  *and* publish a GitHub Release with `PixelFlow-<version>-Windows.7z` +
+  `.sha256` attached.
+- **Or trigger it manually** — GitHub → Actions tab → "Release Build" → "Run
+  workflow", type a version — which builds and uploads the same files as a
+  workflow artifact without creating a tag or a Release.
+
+This is triggered by a tag or a manual run, not by every push to `main` — a
+routine commit doesn't kick off a multi-minute Windows CI build on its own.
+The CI runner has no `photo_professional_tool` checkout next to it, so it
+always downloads the WebView2 Runtime fresh instead of reusing that cache
+(see below).
+
+## Full release build (local)
 
 ```powershell
 .\scripts\build_release.ps1 -Version "0.1.0"
