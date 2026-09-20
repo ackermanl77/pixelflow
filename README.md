@@ -5,31 +5,62 @@ image-processing/generation nodes, and a web canvas UI (built on
 [litegraph.js](https://github.com/jagenjo/litegraph.js), the same library
 ComfyUI's own frontend uses) for wiring nodes together and running them.
 
-## Architecture
+## Current Status
 
-This mirrors ComfyUI's actual design at small scale:
+- `docs/PROJECT_STATUS.md` is the authoritative reference for architecture,
+  entry points, and known limitations — this README only covers day-to-day
+  commands.
+- `docs/NODE_AUTHORING.md` covers adding a new node type.
+- `docs/BUILD.md` covers building the packaged desktop `.exe`.
+- No GPU on this dev machine, so the generation nodes (checkpoint loading,
+  CLIP text encode, sampling) are deterministic CPU-only stubs — see
+  `docs/PROJECT_STATUS.md` for what that means and `docs/NODE_AUTHORING.md`
+  for how to swap in real `diffusers`-based inference later.
 
-- **Nodes** (`backend/nodes/`) declare `INPUT_TYPES`, `RETURN_TYPES`, and a
-  `FUNCTION` to call — the same contract ComfyUI custom nodes use. Nodes
-  register themselves into `NODE_REGISTRY` via the `@register_node` decorator.
-- **`GET /api/nodes`** exposes that registry as JSON. The frontend fetches it
-  on load and dynamically builds a LiteGraph node class per entry — nodes are
-  never hard-coded in the frontend, so adding a Python node makes it show up
-  in the UI automatically.
-- **Graph execution** (`backend/engine/graph.py`) takes a flattened "prompt"
-  (`{node_id: {class_type, inputs}}`, ComfyUI's own execution format) and
-  resolves it recursively with per-node output caching — no separate topo-sort
-  pass needed.
-- **Queue** (`backend/engine/queue.py`) is a single-worker async job queue.
-  Submitted prompts run one at a time in a background thread; progress
-  (`queued` / `executing` / `execution_success` / `execution_error`) streams
-  to the browser over a WebSocket (`/ws`), same event-shape idea as ComfyUI.
-- **Frontend** (`frontend/app.js`) is one file: it builds node classes from
-  `/api/nodes`, renders a categorized node-library sidebar, serializes the
-  canvas into a prompt on "Queue Prompt", and renders queue status + an output
-  gallery from the WebSocket stream. Undo/redo (Ctrl+Z / Ctrl+Y) snapshots
-  `graph.serialize()`. Workflows save/load as JSON, either to the backend
-  (`workflows/`, via `/api/workflows`) or as a downloaded/imported file.
+## Install
+
+```powershell
+pip install -r requirements.txt
+```
+
+## Run (dev web app)
+
+```powershell
+python run.py
+```
+
+Then open http://127.0.0.1:8188 — click **Load Example** for a starter
+checkpoint → prompt → sampler → save graph, then **Queue Prompt**.
+
+## Desktop App
+
+```powershell
+pip install -r requirements-desktop.txt
+python desktop.py
+```
+
+Opens the same app in a native window instead of a browser tab.
+
+**The built app always lands in `release\PixelFlow.exe`** — a fixed-name
+folder `scripts\build_release.ps1` overwrites with the latest build on every
+run.
+
+```powershell
+.\scripts\build_release.ps1 -Version "0.1.0"
+```
+
+The release script installs dependencies, runs PyInstaller, and bundles the
+Microsoft Edge WebView2 Runtime as a sibling `WebView2Runtime\` folder next to
+`PixelFlow.exe` so the packaged app doesn't depend on the target machine
+having WebView2 installed — see `docs/BUILD.md` for the full walkthrough,
+including how it reuses the sibling `photo_professional_tool` project's
+already-downloaded copy of that runtime instead of re-fetching ~300MB.
+
+Generated images, uploads, and saved workflows live in `outputs\`,
+`uploads\`, and `workflows\` next to wherever the app is running from (the
+project root in dev, next to `PixelFlow.exe` when packaged) — see
+`docs/PROJECT_STATUS.md`'s note on `backend/paths.py` for why those two
+locations differ.
 
 ## Nodes included
 
@@ -37,34 +68,10 @@ This mirrors ComfyUI's actual design at small scale:
 - **conditioning**: CLIP Text Encode (stub)
 - **sampling**: KSampler (stub) — deterministic placeholder image generator
 - **image**: Empty Image, Resize, Blur, Brightness/Contrast, Hue/Saturation,
-  Blend, Text Overlay — these are real, CPU-only, Pillow-based operations
+  Blend, Text Overlay — real, CPU-only, Pillow-based operations
 - **output**: Preview Image, Save Image
 
-There's no GPU here, so the "generation" side (Load Checkpoint, CLIP Text
-Encode, KSampler) is intentionally stubbed: it produces a deterministic
-gradient+label image from the prompt/seed instead of running a real diffusion
-model, so the graph shape and execution flow are real and testable end to end
-without needing `torch`/`diffusers`/a GPU.
-
-### Plugging in real generation later
-
-Each stub node's docstring in `backend/nodes/generation.py` and
-`backend/nodes/io_nodes.py` says exactly what to replace. In short, once a GPU
-is available: install `torch` + `diffusers`, load a real pipeline in
-`LoadCheckpoint.load`, and replace `KSamplerStub.sample`'s body with a call to
-`StableDiffusionPipeline(...)`. Nothing else in the engine, queue, or frontend
-needs to change — they only care about the `INPUT_TYPES`/`RETURN_TYPES`
-contract, not what's inside `sample()`.
-
-## Running it
-
-```powershell
-pip install -r requirements.txt
-python run.py
-```
-
-Then open http://127.0.0.1:8188 — click **Load Example** for a starter
-checkpoint → prompt → sampler → save graph, then **Queue Prompt**.
+Adding a new node is a single Python class — see `docs/NODE_AUTHORING.md`.
 
 ## Tests
 

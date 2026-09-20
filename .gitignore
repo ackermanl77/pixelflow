@@ -7,3 +7,19 @@ outputs/*
 uploads/*
 !uploads/.gitkeep
 .pytest_cache/
+
+# Build & release output
+build-release/
+dist-release/
+dist/
+build/
+PixelFlow-*-Windows/
+PixelFlow-*-Windows.zip
+PixelFlow-*-Windows.7z
+PixelFlow-*-Windows.7z.sha256
+# Fixed-name mirror of the current PixelFlow-<version>-Windows/ build output (see
+# scripts/build_release.ps1) -- always the latest build, so PixelFlow.exe has one stable place.
+/release/
+# Downloaded/extracted third-party runtime bundled into releases (see scripts/build_release.ps1).
+# Anchored to the root only -- frontend/vendor/ holds vendored litegraph.js source, not this cache.
+/vendor/
