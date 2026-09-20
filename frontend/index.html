@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>PixelFlow</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/litegraph.js/css/litegraph.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="topbar">
+    <div class="brand">PixelFlow</div>
+    <button id="btn-queue" class="primary">Queue Prompt</button>
+    <button id="btn-example">Load Example</button>
+    <button id="btn-clear">Clear</button>
+    <span class="sep"></span>
+    <button id="btn-undo" title="Ctrl+Z">Undo</button>
+    <button id="btn-redo" title="Ctrl+Y">Redo</button>
+    <span class="sep"></span>
+    <button id="btn-save-workflow">Save Workflow</button>
+    <select id="workflow-select"><option value="">Load workflow...</option></select>
+    <button id="btn-export">Export JSON</button>
+    <label class="file-btn">Import JSON<input id="file-import" type="file" accept="application/json" /></label>
+  </div>
+
+  <div id="main">
+    <aside id="sidebar">
+      <h3>Node Library</h3>
+      <div id="node-list"></div>
+    </aside>
+
+    <div id="canvas-wrap">
+      <canvas id="graph-canvas"></canvas>
+    </div>
+
+    <aside id="rightpanel">
+      <h3>Queue</h3>
+      <div id="queue-list" class="panel-box"></div>
+      <h3>Output Gallery</h3>
+      <div id="gallery" class="panel-box"></div>
+    </aside>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/litegraph.js/build/litegraph.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
