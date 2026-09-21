@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>PixelFlow</title>
   <link rel="stylesheet" href="vendor/litegraph.css" />
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=2" />
 </head>
 <body>
   <div id="topbar">
@@ -15,6 +15,7 @@
     <span class="sep"></span>
     <button id="btn-undo" title="Ctrl+Z">Undo</button>
     <button id="btn-redo" title="Ctrl+Y">Redo</button>
+    <button id="btn-fit-view" title="Fit graph to view">Fit View</button>
     <span class="sep"></span>
     <button id="btn-save-workflow">Save Workflow</button>
     <select id="workflow-select"><option value="">Load workflow...</option></select>
@@ -30,6 +31,10 @@
 
     <div id="canvas-wrap">
       <canvas id="graph-canvas"></canvas>
+      <div id="empty-state">
+        <p>Your graph is empty.</p>
+        <p>Right-click the canvas to add a node, or click <strong>Load Example</strong> above to get started.</p>
+      </div>
     </div>
 
     <aside id="rightpanel">
@@ -40,7 +45,18 @@
     </aside>
   </div>
 
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal-box">
+      <h3>Save Workflow</h3>
+      <input id="modal-input" type="text" placeholder="Workflow name" autocomplete="off" />
+      <div class="modal-actions">
+        <button id="modal-cancel">Cancel</button>
+        <button id="modal-confirm" class="primary">Save</button>
+      </div>
+    </div>
+  </div>
+
   <script src="vendor/litegraph.min.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=2"></script>
 </body>
 </html>

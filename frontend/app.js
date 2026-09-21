@@ -124,7 +124,52 @@ function addNodeToGraph(nodeName, pos) {
   node.pos = center;
   graph.add(node);
   scheduleHistoryPush();
+  updateEmptyState();
   return node;
+}
+
+// ---- Empty-state hint ----
+
+function updateEmptyState() {
+  document.getElementById("empty-state").classList.toggle("hidden", graph._nodes.length > 0);
+}
+
+// ---- Fit graph to view ----
+
+function fitView() {
+  const wrap = document.getElementById("canvas-wrap");
+  const viewW = wrap.clientWidth;
+  const viewH = wrap.clientHeight;
+
+  if (!graph._nodes.length) {
+    canvas.ds.scale = 1;
+    canvas.ds.offset[0] = 0;
+    canvas.ds.offset[1] = 0;
+    canvas.setDirty(true, true);
+    return;
+  }
+
+  const TITLE_HEIGHT = 20; // litegraph draws a node's title bar above node.pos
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const node of graph._nodes) {
+    minX = Math.min(minX, node.pos[0]);
+    minY = Math.min(minY, node.pos[1] - TITLE_HEIGHT);
+    maxX = Math.max(maxX, node.pos[0] + node.size[0]);
+    maxY = Math.max(maxY, node.pos[1] + node.size[1]);
+  }
+
+  const padding = 60;
+  const bboxW = Math.max(maxX - minX, 1);
+  const bboxH = Math.max(maxY - minY, 1);
+  let scale = Math.min((viewW - padding * 2) / bboxW, (viewH - padding * 2) / bboxH);
+  scale = Math.max(0.1, Math.min(scale, 1.5));
+
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  canvas.ds.scale = scale;
+  canvas.ds.offset[0] = viewW / 2 - centerX * scale;
+  canvas.ds.offset[1] = viewH / 2 - centerY * scale;
+  canvas.setDirty(true, true);
 }
 
 // ---- Prompt building (graph -> ComfyUI-style execution prompt) ----
@@ -176,6 +221,28 @@ function addGalleryImage(filename, promptId) {
   gallery.prepend(item);
 }
 
+// ---- Canvas execution highlighting ----
+
+let executingNode = null;
+let executingNodeOriginalColor;
+
+function highlightExecutingNode(nodeId) {
+  clearExecutingHighlight();
+  const node = graph.getNodeById(Number(nodeId));
+  if (!node) return;
+  executingNode = node;
+  executingNodeOriginalColor = node.color;
+  node.color = "#5b8def";
+  canvas.setDirty(true, true);
+}
+
+function clearExecutingHighlight() {
+  if (!executingNode) return;
+  executingNode.color = executingNodeOriginalColor;
+  executingNode = null;
+  canvas.setDirty(true, true);
+}
+
 function connectWebSocket() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -185,10 +252,13 @@ function connectWebSocket() {
       setQueueStatus(msg.prompt_id, "status-queued", `Queued: ${msg.prompt_id}`);
     } else if (msg.type === "execution_start") {
       setQueueStatus(msg.prompt_id, "status-running", `Running: ${msg.prompt_id}`);
+      clearExecutingHighlight();
     } else if (msg.type === "executing") {
       setQueueStatus(msg.prompt_id, "status-running", `Running: ${msg.prompt_id} — ${msg.class_type}`);
+      highlightExecutingNode(msg.node_id);
     } else if (msg.type === "execution_success") {
       setQueueStatus(msg.prompt_id, "status-completed", `Done: ${msg.prompt_id}`);
+      clearExecutingHighlight();
       for (const nodeOutput of Object.values(msg.outputs || {})) {
         for (const filename of nodeOutput.images || []) {
           addGalleryImage(filename, msg.prompt_id);
@@ -196,6 +266,7 @@ function connectWebSocket() {
       }
     } else if (msg.type === "execution_error") {
       setQueueStatus(msg.prompt_id, "status-error", `Error: ${msg.prompt_id} — ${msg.error}`);
+      clearExecutingHighlight();
     }
   };
   ws.onclose = () => setTimeout(connectWebSocket, 2000);
@@ -236,6 +307,7 @@ function restoreSnapshot(snap) {
   graph.configure(JSON.parse(snap));
   suppressHistory = false;
   syncWidgetsFromProperties();
+  updateEmptyState();
 }
 
 function undo() {
@@ -248,6 +320,45 @@ function redo() {
   if (historyIndex >= history.length - 1) return;
   historyIndex++;
   restoreSnapshot(history[historyIndex]);
+}
+
+// ---- Small themed modal (replaces window.prompt(), which doesn't render in
+// every embedded browser context and looks out of place in a themed app) ----
+
+function promptModal(title, defaultValue = "") {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("modal-overlay");
+    const input = document.getElementById("modal-input");
+    const confirmBtn = document.getElementById("modal-confirm");
+    const cancelBtn = document.getElementById("modal-cancel");
+
+    overlay.querySelector("h3").textContent = title;
+    input.value = defaultValue;
+    overlay.classList.remove("hidden");
+    input.focus();
+    input.select();
+
+    function cleanup(result) {
+      overlay.classList.add("hidden");
+      confirmBtn.removeEventListener("click", onConfirm);
+      cancelBtn.removeEventListener("click", onCancel);
+      input.removeEventListener("keydown", onKeydown);
+      resolve(result);
+    }
+    function onConfirm() {
+      cleanup(input.value.trim() || null);
+    }
+    function onCancel() {
+      cleanup(null);
+    }
+    function onKeydown(e) {
+      if (e.key === "Enter") onConfirm();
+      if (e.key === "Escape") onCancel();
+    }
+    confirmBtn.addEventListener("click", onConfirm);
+    cancelBtn.addEventListener("click", onCancel);
+    input.addEventListener("keydown", onKeydown);
+  });
 }
 
 // ---- Workflow save / load / export / import ----
@@ -286,6 +397,7 @@ function loadExampleGraph() {
 
   canvas.setDirty(true, true);
   pushHistory();
+  updateEmptyState();
 }
 
 // ---- Wiring up UI ----
@@ -311,13 +423,15 @@ function initUI() {
   document.getElementById("btn-clear").onclick = () => {
     graph.clear();
     pushHistory();
+    updateEmptyState();
   };
 
   document.getElementById("btn-undo").onclick = undo;
   document.getElementById("btn-redo").onclick = redo;
+  document.getElementById("btn-fit-view").onclick = fitView;
 
   document.getElementById("btn-save-workflow").onclick = async () => {
-    const name = window.prompt("Workflow name:");
+    const name = await promptModal("Save Workflow As");
     if (!name) return;
     await fetch(`/api/workflows/${encodeURIComponent(name)}`, {
       method: "POST",
@@ -335,6 +449,7 @@ function initUI() {
     graph.configure(data);
     syncWidgetsFromProperties();
     pushHistory();
+    updateEmptyState();
   };
 
   document.getElementById("btn-export").onclick = () => {
@@ -353,6 +468,7 @@ function initUI() {
       graph.configure(JSON.parse(reader.result));
       syncWidgetsFromProperties();
       pushHistory();
+      updateEmptyState();
     };
     reader.readAsText(file);
     e.target.value = "";
@@ -367,6 +483,16 @@ function initUI() {
     } else if (e.key.toLowerCase() === "y") {
       e.preventDefault();
       redo();
+    }
+  });
+
+  // Litegraph's own right-click "Add Node" context menu only closes itself on
+  // a click back on the canvas -- clicking the sidebar or the queue/gallery
+  // panel instead leaves it stuck floating on screen. Force-close it on any
+  // pointerdown outside the canvas area.
+  document.addEventListener("pointerdown", (e) => {
+    if (!document.getElementById("canvas-wrap").contains(e.target)) {
+      LiteGraph.closeAllContextMenus(window);
     }
   });
 }
@@ -391,11 +517,18 @@ async function main() {
   initUI();
   connectWebSocket();
 
-  graph.onNodeAdded = () => scheduleHistoryPush();
-  graph.onNodeRemoved = () => scheduleHistoryPush();
+  graph.onNodeAdded = () => {
+    scheduleHistoryPush();
+    updateEmptyState();
+  };
+  graph.onNodeRemoved = () => {
+    scheduleHistoryPush();
+    updateEmptyState();
+  };
 
   graph.start();
   pushHistory();
+  updateEmptyState();
 }
 
 main();
