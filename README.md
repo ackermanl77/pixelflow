@@ -7,6 +7,8 @@ ComfyUI's own frontend uses) for wiring nodes together and running them.
 
 ## Current Status
 
+- `docs/USER_GUIDE.md` walks through the app and every feature in it — start
+  there if you just want to use PixelFlow.
 - `docs/PROJECT_STATUS.md` is the authoritative reference for architecture,
   entry points, and known limitations — this README only covers day-to-day
   commands.
