@@ -1,6 +1,14 @@
+import logging
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from ..nodes import NODE_REGISTRY
+
+logger = logging.getLogger(__name__)
+
+
+class GraphError(Exception):
+    """Raised for structural problems in a prompt graph: an unknown node id,
+    an unknown class_type, or a cycle between node inputs."""
 
 
 def _is_link(value: Any) -> bool:
@@ -21,29 +29,49 @@ def execute_prompt(
 
     cache: Dict[str, Tuple[Any, ...]] = {}
     ui_outputs: Dict[str, Any] = {}
+    in_progress: set = set()
 
     def resolve(node_id: str) -> Tuple[Any, ...]:
         if node_id in cache:
             return cache[node_id]
+        if node_id in in_progress:
+            raise GraphError(f"Cycle detected in node graph at node '{node_id}'")
 
-        spec = prompt[node_id]
-        node_cls = NODE_REGISTRY[spec["class_type"]]
+        try:
+            spec = prompt[node_id]
+        except KeyError:
+            raise GraphError(f"Node '{node_id}' is referenced but not present in the prompt") from None
+
+        class_type = spec.get("class_type")
+        try:
+            node_cls = NODE_REGISTRY[class_type]
+        except KeyError:
+            raise GraphError(f"Unknown node class '{class_type}' (node '{node_id}')") from None
         node = node_cls()
 
-        kwargs = {}
-        for name, value in spec.get("inputs", {}).items():
-            if _is_link(value):
-                src_id, out_idx = value
-                src_outputs = resolve(str(src_id))
-                kwargs[name] = src_outputs[out_idx]
-            else:
-                kwargs[name] = value
+        in_progress.add(node_id)
+        try:
+            kwargs = {}
+            for name, value in spec.get("inputs", {}).items():
+                if _is_link(value):
+                    src_id, out_idx = value
+                    src_outputs = resolve(str(src_id))
+                    kwargs[name] = src_outputs[out_idx]
+                else:
+                    kwargs[name] = value
 
-        if on_node_start:
-            on_node_start(node_id, spec["class_type"])
+            if on_node_start:
+                on_node_start(node_id, class_type)
 
-        func = getattr(node, node_cls.FUNCTION)
-        result = func(**kwargs)
+            logger.debug("executing node %s (%s)", node_id, class_type)
+            func = getattr(node, node_cls.FUNCTION)
+            try:
+                result = func(**kwargs)
+            except Exception:
+                logger.exception("node %s (%s) raised during execution", node_id, class_type)
+                raise
+        finally:
+            in_progress.discard(node_id)
 
         if isinstance(result, dict):
             ui_outputs[node_id] = result

@@ -1,10 +1,13 @@
 import asyncio
+import logging
 import uuid
 from typing import Any, Dict, List
 
 from fastapi import WebSocket
 
 from .graph import execute_prompt
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectionManager:
@@ -25,6 +28,7 @@ class ConnectionManager:
             try:
                 await ws.send_json(message)
             except Exception:
+                logger.debug("dropping dead websocket connection", exc_info=True)
                 dead.append(ws)
         for ws in dead:
             self.disconnect(ws)
@@ -80,6 +84,7 @@ class ExecutionQueue:
                     {"type": "execution_success", "prompt_id": prompt_id, "outputs": result}
                 )
             except Exception as exc:  # noqa: BLE001 - surface any node error to the client
+                logger.exception("prompt %s failed during execution", prompt_id)
                 self.history[prompt_id] = {"status": "error", "error": str(exc)}
                 await self.manager.broadcast(
                     {"type": "execution_error", "prompt_id": prompt_id, "error": str(exc)}
