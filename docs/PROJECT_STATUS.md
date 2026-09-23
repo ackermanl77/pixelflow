@@ -36,8 +36,9 @@ files directly (see `backend/main.py`'s two `app.mount(...)` calls).
   recursively with per-node output caching. No separate topological-sort pass.
 - **`backend/engine/queue.py`** — a single-worker async job queue. Submitted
   prompts run one at a time in a background thread; progress
-  (`queued`/`executing`/`execution_success`/`execution_error`) streams to the
-  browser over `/ws`.
+  (`queued`/`executing`/`execution_success`/`execution_error`, plus
+  per-step `progress` messages — see below) streams to the browser over
+  `/ws`.
 - **`backend/main.py`** — the FastAPI app: `GET /api/nodes` (registry as
   JSON), `POST /api/queue`, `GET /api/history`, `POST /api/upload`,
   `GET|POST /api/workflows[/{name}]`, and the `/ws` websocket. Mounts
@@ -51,9 +52,13 @@ files directly (see `backend/main.py`'s two `app.mount(...)` calls).
 - **`frontend/app.js`** — the entire client. Fetches `/api/nodes` and builds a
   LiteGraph node class per entry (nodes are never hard-coded here — a new
   Python node shows up in the UI automatically). Handles the node-library
-  sidebar, prompt building/queueing, the WebSocket-driven queue/gallery
-  panels, undo/redo (Ctrl+Z/Ctrl+Y, debounced graph snapshots), and
-  workflow save/load (backend-persisted JSON, plus file export/import).
+  sidebar (with a live substring-filter search box over `#node-list`'s
+  items, `filterNodeList()`), prompt building/queueing, the WebSocket-driven
+  queue/gallery panels (`#gallery` is a responsive CSS grid, not one
+  full-width image per row; clicking a thumbnail opens a click-to-close
+  full-screen lightbox), undo/redo (Ctrl+Z/Ctrl+Y, debounced graph
+  snapshots), and workflow save/load (backend-persisted JSON, plus file
+  export/import).
 - **`frontend/vendor/`** — litegraph.js and its CSS, vendored locally (not
   loaded from a CDN) so the packaged desktop app works fully offline.
 - **`desktop.py`** — runs the FastAPI server in a background thread (uvicorn
@@ -87,9 +92,38 @@ out-of-the-box experience is usable on CPU). See
 `CLIPTextEncode` still just wraps the prompt string as `{"text": ...}`
 rather than running a separate embedding step: `KSampler` passes that string
 straight to the loaded pipeline's own `prompt=` argument, which does its own
-tokenization/CLIP-encoding internally. `latent_image` (from `EmptyImage`)
-only supplies the output width/height — there's no real VAE latent or
+tokenization/CLIP-encoding internally. The same node class doubles as the
+negative prompt: wire a second `CLIPTextEncode` into `KSampler`'s optional
+`negative` input and its text reaches the pipeline's `negative_prompt=`, the
+same two-nodes-into-one-sampler shape real ComfyUI uses. `KSampler` also
+exposes `sampler` (a dropdown swapping the pipeline's diffusers scheduler via
+`SchedulerClass.from_config(pipe.scheduler.config)` — Euler, Euler
+Ancestral, DPM-Solver Multistep, PNDM, DDIM, LMS, Heun), `seed` (>= 0
+reproduces the same output for a given sampler/prompt/steps/cfg; the default
+`-1` picks a fresh random seed each run), and `batch_size` (passed as
+`num_images_per_prompt=`, generating more than one image per queue
+submission). `KSampler`'s output is always a list of one or more PIL images
+now (even at `batch_size == 1`), and `SaveImage`/`PreviewImage` save every
+image in that list; other IMAGE-producing nodes (`EmptyImage`, `LoadImage`,
+the `image_ops` nodes) are unaffected and still hand those two nodes a
+single `PIL.Image` directly. `latent_image` (from `EmptyImage`) only
+supplies the output width/height — there's no real VAE latent or
 image-to-image/inpainting support, every run is txt2img from scratch.
+
+`KSamplerStub.sample()` also accepts an optional `on_progress` kwarg, passed
+as diffusers' `callback_on_step_end` to the pipeline call and invoked once
+per denoising step as `on_progress(step, total_steps)` (1-based). This isn't
+part of every node's call signature — `execute_prompt()`
+(`backend/engine/graph.py`) only injects it, via `inspect.signature()`, into
+nodes whose `FUNCTION` declares an `on_progress` parameter, so most nodes
+(which finish in one shot) are unaffected. `ExecutionQueue`
+(`backend/engine/queue.py`) wires this into a `{"type": "progress",
+"prompt_id", "node_id", "step", "total"}` broadcast alongside the existing
+`queued`/`executing`/`execution_success`/`execution_error` messages.
+`frontend/app.js`'s `connectWebSocket()` renders it as a small progress bar
+docked to the bottom of the canvas (`#progress-wrap`), shown for the
+currently-executing node and hidden again on the next `executing`/terminal
+message (a node that never reports progress just leaves the bar hidden).
 
 ## Known limitations
 

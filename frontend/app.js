@@ -107,11 +107,32 @@ function buildSidebar() {
       const item = document.createElement("div");
       item.className = "node-item";
       item.textContent = nodeDefs[name].display_name;
+      item.dataset.name = nodeDefs[name].display_name.toLowerCase();
       item.onclick = () => addNodeToGraph(name);
       group.appendChild(item);
     }
     container.appendChild(group);
   }
+  filterNodeList(document.getElementById("node-search").value);
+}
+
+// ---- Node palette search (filters buildSidebar()'s items live as-typed) ----
+
+function filterNodeList(query) {
+  const q = query.trim().toLowerCase();
+  const container = document.getElementById("node-list");
+  let anyVisible = false;
+  for (const group of container.querySelectorAll(".category-group")) {
+    let groupHasMatch = false;
+    for (const item of group.querySelectorAll(".node-item")) {
+      const match = !q || item.dataset.name.includes(q);
+      item.classList.toggle("hidden", !match);
+      if (match) groupHasMatch = true;
+    }
+    group.classList.toggle("hidden", !groupHasMatch);
+    if (groupHasMatch) anyVisible = true;
+  }
+  document.getElementById("node-search-empty").classList.toggle("hidden", anyVisible);
 }
 
 function addNodeToGraph(nodeName, pos) {
@@ -217,8 +238,22 @@ function addGalleryImage(filename, promptId) {
   const gallery = document.getElementById("gallery");
   const item = document.createElement("div");
   item.className = "gallery-item";
-  item.innerHTML = `<img src="/outputs/${filename}" /><div class="caption">${filename}</div>`;
+  item.innerHTML = `<img src="/outputs/${filename}" alt="${filename}" /><div class="caption">${filename}</div>`;
+  item.querySelector("img").onclick = () => openLightbox(`/outputs/${filename}`);
   gallery.prepend(item);
+}
+
+// ---- Lightbox (click a gallery thumbnail to view it full-size) ----
+
+function openLightbox(src) {
+  const overlay = document.getElementById("lightbox-overlay");
+  document.getElementById("lightbox-img").src = src;
+  overlay.classList.remove("hidden");
+}
+
+function closeLightbox() {
+  document.getElementById("lightbox-overlay").classList.add("hidden");
+  document.getElementById("lightbox-img").src = "";
 }
 
 // ---- Canvas execution highlighting ----
@@ -243,6 +278,27 @@ function clearExecutingHighlight() {
   canvas.setDirty(true, true);
 }
 
+// ---- Step progress bar (fed by "progress" websocket messages, e.g.
+// KSampler's diffusion steps) ----
+
+function showProgress(nodeId, step, total) {
+  const wrap = document.getElementById("progress-wrap");
+  const fill = document.getElementById("progress-fill");
+  const label = document.getElementById("progress-label");
+  const node = graph.getNodeById(Number(nodeId));
+  const title = node ? node.title || node.comfyClass : nodeId;
+  const pct = total > 0 ? Math.min(100, Math.round((step / total) * 100)) : 0;
+  wrap.classList.remove("hidden");
+  fill.style.width = `${pct}%`;
+  label.textContent = `${title}: step ${step} / ${total}`;
+}
+
+function hideProgress() {
+  const wrap = document.getElementById("progress-wrap");
+  wrap.classList.add("hidden");
+  document.getElementById("progress-fill").style.width = "0%";
+}
+
 function connectWebSocket() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -253,12 +309,17 @@ function connectWebSocket() {
     } else if (msg.type === "execution_start") {
       setQueueStatus(msg.prompt_id, "status-running", `Running: ${msg.prompt_id}`);
       clearExecutingHighlight();
+      hideProgress();
     } else if (msg.type === "executing") {
       setQueueStatus(msg.prompt_id, "status-running", `Running: ${msg.prompt_id} — ${msg.class_type}`);
       highlightExecutingNode(msg.node_id);
+      hideProgress(); // a new node started; it may not report step progress at all
+    } else if (msg.type === "progress") {
+      showProgress(msg.node_id, msg.step, msg.total);
     } else if (msg.type === "execution_success") {
       setQueueStatus(msg.prompt_id, "status-completed", `Done: ${msg.prompt_id}`);
       clearExecutingHighlight();
+      hideProgress();
       for (const nodeOutput of Object.values(msg.outputs || {})) {
         for (const filename of nodeOutput.images || []) {
           addGalleryImage(filename, msg.prompt_id);
@@ -267,6 +328,7 @@ function connectWebSocket() {
     } else if (msg.type === "execution_error") {
       setQueueStatus(msg.prompt_id, "status-error", `Error: ${msg.prompt_id} — ${msg.error}`);
       clearExecutingHighlight();
+      hideProgress();
     }
   };
   ws.onclose = () => setTimeout(connectWebSocket, 2000);
@@ -430,6 +492,12 @@ function initUI() {
   document.getElementById("btn-redo").onclick = redo;
   document.getElementById("btn-fit-view").onclick = fitView;
 
+  document.getElementById("node-search").addEventListener("input", (e) => {
+    filterNodeList(e.target.value);
+  });
+
+  document.getElementById("lightbox-overlay").addEventListener("click", closeLightbox);
+
   document.getElementById("btn-save-workflow").onclick = async () => {
     const name = await promptModal("Save Workflow As");
     if (!name) return;
@@ -475,6 +543,10 @@ function initUI() {
   };
 
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !document.getElementById("lightbox-overlay").classList.contains("hidden")) {
+      closeLightbox();
+      return;
+    }
     const mod = e.ctrlKey || e.metaKey;
     if (!mod) return;
     if (e.key.toLowerCase() === "z") {

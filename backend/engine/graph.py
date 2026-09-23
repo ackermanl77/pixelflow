@@ -1,3 +1,4 @@
+import inspect
 import logging
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -18,6 +19,7 @@ def _is_link(value: Any) -> bool:
 def execute_prompt(
     prompt: Dict[str, Dict[str, Any]],
     on_node_start: Optional[Callable[[str, str], None]] = None,
+    on_progress: Optional[Callable[[str, int, int], None]] = None,
 ) -> Dict[str, Any]:
     """Execute a graph given in ComfyUI-style "prompt" form:
 
@@ -25,6 +27,13 @@ def execute_prompt(
 
     Returns a dict of {node_id: ui_dict} collected from OUTPUT_NODE results
     (e.g. {"images": [filename, ...]}).
+
+    `on_progress`, if given, is called as `on_progress(node_id, step, total)`
+    for in-progress work within a single node (e.g. KSampler's diffusion
+    steps). It's only wired into a node's FUNCTION call when that function
+    declares an `on_progress` parameter (checked via introspection here rather
+    than by changing every node's call signature) - most nodes finish in one
+    shot and have no sub-steps to report.
     """
 
     cache: Dict[str, Tuple[Any, ...]] = {}
@@ -65,6 +74,8 @@ def execute_prompt(
 
             logger.debug("executing node %s (%s)", node_id, class_type)
             func = getattr(node, node_cls.FUNCTION)
+            if on_progress is not None and "on_progress" in inspect.signature(func).parameters:
+                kwargs["on_progress"] = lambda step, total, _id=node_id: on_progress(_id, step, total)
             try:
                 result = func(**kwargs)
             except Exception:

@@ -1,15 +1,47 @@
+import random
+
 import torch
+from diffusers import (
+    DDIMScheduler,
+    DPMSolverMultistepScheduler,
+    EulerAncestralDiscreteScheduler,
+    EulerDiscreteScheduler,
+    HeunDiscreteScheduler,
+    LMSDiscreteScheduler,
+    PNDMScheduler,
+)
 
 from .base import NodeBase, register_node
+
+# A reasonable subset of diffusers' interchangeable schedulers. Each is
+# swapped onto the cached pipeline via `SchedulerClass.from_config(pipe.scheduler.config)`
+# right before sampling, so the same cached pipeline instance can be reused
+# across KSampler nodes/runs that pick different samplers without reloading
+# the underlying model weights.
+SCHEDULERS = {
+    "euler": EulerDiscreteScheduler,
+    "euler_ancestral": EulerAncestralDiscreteScheduler,
+    "dpm_multistep": DPMSolverMultistepScheduler,
+    "pndm": PNDMScheduler,
+    "ddim": DDIMScheduler,
+    "lms": LMSDiscreteScheduler,
+    "heun": HeunDiscreteScheduler,
+}
+
+MAX_SEED = 2**31 - 1
 
 
 @register_node("CLIP Text Encode")
 class CLIPTextEncode(NodeBase):
     """Wraps the prompt text as CONDITIONING. There's no separate embedding
     step here: KSampler passes this text straight to the loaded pipeline's
-    own `prompt=` argument, which does its own tokenization/CLIP-encoding
-    internally. This node exists so the graph keeps the familiar
-    checkpoint -> conditioning -> sampler shape.
+    own `prompt=`/`negative_prompt=` arguments, which do their own
+    tokenization/CLIP-encoding internally. This node exists so the graph
+    keeps the familiar checkpoint -> conditioning -> sampler shape. The same
+    node class is used for both the positive and negative prompt - wire a
+    second instance into KSampler's optional `negative` input for a real
+    negative prompt, the same way ComfyUI itself wires two CLIPTextEncode
+    nodes into a KSampler.
     """
 
     CATEGORY = "conditioning"
@@ -31,6 +63,14 @@ class KSamplerStub(NodeBase):
     LoadCheckpoint attaches to `model`. `latent_image` only supplies the
     output width/height (it's a plain RGB PIL.Image, not a real VAE latent),
     so this is txt2img-only for now - no image-to-image or inpainting.
+
+    `sampler` swaps the pipeline's scheduler (see SCHEDULERS above). `seed`
+    reproduces the same output when >= 0; a negative seed (the default, -1)
+    picks a fresh random seed each run. `negative` is an optional second
+    CONDITIONING input (wire a second CLIPTextEncode into it) passed through
+    as the pipeline's `negative_prompt=`. `batch_size` generates more than
+    one image per run via `num_images_per_prompt=`; the output is always a
+    list of one or more PIL images.
     """
 
     CATEGORY = "sampling"
@@ -45,27 +85,72 @@ class KSamplerStub(NodeBase):
                 "model": ("MODEL",),
                 "positive": ("CONDITIONING",),
                 "latent_image": ("IMAGE",),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 2**31 - 1}),
+                "sampler": (list(SCHEDULERS.keys()), {"default": "euler"}),
+                "seed": ("INT", {"default": -1, "min": -1, "max": MAX_SEED}),
                 "steps": ("INT", {"default": 20, "min": 1, "max": 150}),
                 "cfg": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 30.0}),
-            }
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 8}),
+            },
+            "optional": {
+                "negative": ("CONDITIONING",),
+            },
         }
 
-    def sample(self, model, positive, latent_image, seed, steps, cfg):
+    def sample(
+        self,
+        model,
+        positive,
+        latent_image,
+        sampler="euler",
+        seed=-1,
+        steps=20,
+        cfg=7.0,
+        batch_size=1,
+        negative=None,
+        on_progress=None,
+    ):
         pipe = model["pipeline"]
+
+        scheduler_cls = SCHEDULERS.get(sampler)
+        if scheduler_cls is not None and not isinstance(pipe.scheduler, scheduler_cls):
+            pipe.scheduler = scheduler_cls.from_config(pipe.scheduler.config)
+
         text = positive.get("text", "")
+        negative_text = negative.get("text", "") if negative else None
+
         width, height = latent_image.size
         # SD pipelines require dimensions that are multiples of 8.
         width = max(8, (width // 8) * 8)
         height = max(8, (height // 8) * 8)
 
-        generator = torch.Generator(device=pipe.device).manual_seed(int(seed))
+        seed = int(seed)
+        if seed < 0:
+            seed = random.randint(0, MAX_SEED)
+        generator = torch.Generator(device=pipe.device).manual_seed(seed)
+
+        total_steps = int(steps)
+
+        def _report_progress(pipe_self, step, timestep, callback_kwargs):
+            # diffusers' callback_on_step_end contract: called after each
+            # denoising step with (pipeline, step_index, timestep,
+            # callback_kwargs), and must return callback_kwargs unmodified
+            # (or with any changes to the tensors it requested) for the loop
+            # to continue normally. `step` is 0-based; report 1-based so a
+            # UI can show e.g. "3 / 20" rather than "2 / 20".
+            on_progress(step + 1, total_steps)
+            return callback_kwargs
+
         result = pipe(
             prompt=text,
+            negative_prompt=negative_text,
             width=width,
             height=height,
-            num_inference_steps=int(steps),
+            num_inference_steps=total_steps,
             guidance_scale=float(cfg),
+            num_images_per_prompt=int(batch_size),
             generator=generator,
+            callback_on_step_end=_report_progress if on_progress is not None else None,
         )
-        return (result.images[0],)
+        # Always a list (even for batch_size == 1) so downstream nodes
+        # (SaveImage/PreviewImage) have one consistent shape to handle.
+        return (list(result.images),)

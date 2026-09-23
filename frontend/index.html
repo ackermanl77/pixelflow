@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>PixelFlow</title>
   <link rel="stylesheet" href="vendor/litegraph.css" />
-  <link rel="stylesheet" href="style.css?v=2" />
+  <link rel="stylesheet" href="style.css?v=3" />
 </head>
 <body>
   <div id="topbar">
@@ -26,7 +26,9 @@
   <div id="main">
     <aside id="sidebar">
       <h3>Node Library</h3>
+      <input id="node-search" type="text" placeholder="Search nodes..." autocomplete="off" />
       <div id="node-list"></div>
+      <div id="node-search-empty" class="hidden">No nodes match your search.</div>
     </aside>
 
     <div id="canvas-wrap">
@@ -34,6 +36,10 @@
       <div id="empty-state">
         <p>Your graph is empty.</p>
         <p>Right-click the canvas to add a node, or click <strong>Load Example</strong> above to get started.</p>
+      </div>
+      <div id="progress-wrap" class="hidden">
+        <div id="progress-label"></div>
+        <div id="progress-track"><div id="progress-fill"></div></div>
       </div>
     </div>
 
@@ -56,7 +62,11 @@
     </div>
   </div>
 
+  <div id="lightbox-overlay" class="lightbox-overlay hidden">
+    <img id="lightbox-img" src="" alt="" />
+  </div>
+
   <script src="vendor/litegraph.min.js"></script>
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>

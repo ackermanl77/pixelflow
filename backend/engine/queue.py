@@ -114,8 +114,24 @@ class ExecutionQueue:
                     loop,
                 )
 
+            def on_progress(node_id: str, step: int, total: int, _pid: str = prompt_id) -> None:
+                asyncio.run_coroutine_threadsafe(
+                    self.manager.broadcast(
+                        {
+                            "type": "progress",
+                            "prompt_id": _pid,
+                            "node_id": node_id,
+                            "step": step,
+                            "total": total,
+                        }
+                    ),
+                    loop,
+                )
+
             try:
-                result = await loop.run_in_executor(None, lambda: execute_prompt(prompt, on_node_start))
+                result = await loop.run_in_executor(
+                    None, lambda: execute_prompt(prompt, on_node_start, on_progress)
+                )
                 self._record_history(prompt_id, {"status": "completed", "outputs": result})
                 await self.manager.broadcast(
                     {"type": "execution_success", "prompt_id": prompt_id, "outputs": result}

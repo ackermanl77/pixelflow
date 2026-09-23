@@ -132,6 +132,18 @@ def _save(image, prefix, folder):
     return path.name
 
 
+def _images_from_input(image):
+    """Normalize an IMAGE input to a list of PIL Images. Most nodes
+    (EmptyImage, LoadImage, the image_ops nodes) still output a single
+    PIL.Image directly, but KSampler outputs a list of one or more images
+    (its `batch_size` input) - accept either shape here so SaveImage/
+    PreviewImage save every image in a batch instead of assuming exactly
+    one."""
+    if isinstance(image, (list, tuple)):
+        return list(image)
+    return [image]
+
+
 @register_node("Preview Image")
 class PreviewImage(NodeBase):
     CATEGORY = "output"
@@ -144,8 +156,8 @@ class PreviewImage(NodeBase):
         return {"required": {"image": ("IMAGE",)}}
 
     def preview(self, image):
-        name = _save(image, "preview", OUTPUT_DIR)
-        return {"images": [name]}
+        names = [_save(img, "preview", OUTPUT_DIR) for img in _images_from_input(image)]
+        return {"images": names}
 
 
 @register_node("Save Image")
@@ -165,5 +177,5 @@ class SaveImage(NodeBase):
         }
 
     def save(self, image, filename_prefix):
-        name = _save(image, filename_prefix, OUTPUT_DIR)
-        return {"images": [name]}
+        names = [_save(img, filename_prefix, OUTPUT_DIR) for img in _images_from_input(image)]
+        return {"images": names}
