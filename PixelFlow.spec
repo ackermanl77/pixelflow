@@ -7,7 +7,7 @@ binaries = []
 hiddenimports = ["backend.main"]
 hiddenimports += collect_submodules("backend")
 
-for package in ["uvicorn", "pywebview"]:
+for package in ["uvicorn", "pywebview", "torch", "diffusers", "transformers", "accelerate", "safetensors"]:
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas
     binaries += package_binaries

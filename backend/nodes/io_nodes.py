@@ -1,16 +1,74 @@
+import logging
+import threading
 import uuid
 from pathlib import Path
 
+import torch
+from diffusers import StableDiffusionPipeline
 from PIL import Image, ImageColor
 
 from .base import NodeBase, register_node
-from ..paths import OUTPUT_DIR, UPLOAD_DIR, safe_path
+from ..paths import CHECKPOINT_DIR, OUTPUT_DIR, PathTraversalError, UPLOAD_DIR, safe_path
+
+logger = logging.getLogger(__name__)
+
+# Constructing a pipeline is expensive (multi-second, multi-GB of weights), so
+# loaded pipelines are cached in-process per (ckpt_name, device) for the life
+# of the server rather than reloaded on every node execution.
+_pipeline_cache: dict[tuple[str, str], StableDiffusionPipeline] = {}
+_pipeline_cache_lock = threading.Lock()
 
 
-@register_node("Load Checkpoint (Stub)")
+def _resolve_device_and_dtype() -> tuple[str, torch.dtype]:
+    if torch.cuda.is_available():
+        return "cuda", torch.float16
+    return "cpu", torch.float32
+
+
+def _local_checkpoint_path(ckpt_name: str) -> Path | None:
+    """Resolve `ckpt_name` to a local file/folder under CHECKPOINT_DIR, or
+    None if it isn't one (e.g. it's a Hugging Face Hub repo id instead).
+    Uses safe_path so a malicious ckpt_name can't read files outside
+    CHECKPOINT_DIR via '..' or an absolute path."""
+    try:
+        candidate = safe_path(CHECKPOINT_DIR, ckpt_name)
+    except PathTraversalError:
+        return None
+    return candidate if candidate.exists() else None
+
+
+def _load_pipeline(ckpt_name: str) -> StableDiffusionPipeline:
+    device, dtype = _resolve_device_and_dtype()
+    cache_key = (ckpt_name, device)
+    with _pipeline_cache_lock:
+        cached = _pipeline_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        local_path = _local_checkpoint_path(ckpt_name)
+        if local_path is not None and local_path.is_file():
+            logger.info("loading checkpoint from local file %s", local_path)
+            pipe = StableDiffusionPipeline.from_single_file(str(local_path), torch_dtype=dtype)
+        elif local_path is not None and local_path.is_dir():
+            logger.info("loading checkpoint from local directory %s", local_path)
+            pipe = StableDiffusionPipeline.from_pretrained(str(local_path), torch_dtype=dtype)
+        else:
+            logger.info("loading checkpoint '%s' from the Hugging Face Hub", ckpt_name)
+            pipe = StableDiffusionPipeline.from_pretrained(ckpt_name, torch_dtype=dtype)
+
+        pipe = pipe.to(device)
+        pipe.set_progress_bar_config(disable=True)
+        _pipeline_cache[cache_key] = pipe
+        return pipe
+
+
+@register_node("Load Checkpoint")
 class LoadCheckpoint(NodeBase):
-    """Stands in for a real checkpoint loader, e.g.
-    diffusers.StableDiffusionPipeline.from_pretrained(ckpt_name).
+    """Loads a real Stable Diffusion pipeline via diffusers. `ckpt_name` is
+    resolved, in order: a local file (.safetensors/.ckpt) under
+    models/checkpoints/, a local diffusers-format folder under the same
+    directory, or otherwise a Hugging Face Hub repo id (downloaded and
+    cached on first use - requires internet access the first time).
     """
 
     CATEGORY = "loaders"
@@ -20,10 +78,11 @@ class LoadCheckpoint(NodeBase):
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"ckpt_name": ("STRING", {"default": "stub-diffusion-v1"})}}
+        return {"required": {"ckpt_name": ("STRING", {"default": "stabilityai/sd-turbo"})}}
 
     def load(self, ckpt_name):
-        return ({"name": ckpt_name},)
+        pipe = _load_pipeline(ckpt_name)
+        return ({"name": ckpt_name, "pipeline": pipe},)
 
 
 @register_node("Empty Image")

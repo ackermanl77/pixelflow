@@ -26,9 +26,10 @@ FRONTEND_DIR = BUNDLE_DIR / "frontend"
 OUTPUT_DIR = ROOT_DIR / "outputs"
 UPLOAD_DIR = ROOT_DIR / "uploads"
 WORKFLOW_DIR = ROOT_DIR / "workflows"
+CHECKPOINT_DIR = ROOT_DIR / "models" / "checkpoints"
 
-for _dir in (OUTPUT_DIR, UPLOAD_DIR, WORKFLOW_DIR):
-    _dir.mkdir(exist_ok=True)
+for _dir in (OUTPUT_DIR, UPLOAD_DIR, WORKFLOW_DIR, CHECKPOINT_DIR):
+    _dir.mkdir(parents=True, exist_ok=True)
 
 
 class PathTraversalError(ValueError):

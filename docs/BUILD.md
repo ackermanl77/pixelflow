@@ -12,6 +12,19 @@ PixelFlow can run three ways:
 
 This doc covers building #3.
 
+> **Package size note:** since `LoadCheckpoint`/`KSampler` run real
+> `diffusers`/`torch` inference (see [PROJECT_STATUS.md](PROJECT_STATUS.md)),
+> the packaged `.exe` now bundles those libraries too, which makes the build
+> considerably larger and slower than before torch was a dependency. Model
+> *weights* are not bundled — they're downloaded to `models/checkpoints/`
+> (local files) or the Hugging Face Hub cache on first use, not packaged into
+> the archive. `PixelFlow.spec` collects `torch`/`diffusers`/`transformers`/
+> `accelerate`/`safetensors` via `collect_all`, but this hasn't been
+> verified against a full `scripts/build_release.ps1` run — do a real build
+> and smoke-test the generation nodes in the packaged `.exe` before shipping
+> a release, since PyInstaller-freezing ML libraries with dynamic imports can
+> surface missing-hidden-import errors that only show up at runtime.
+
 ## One-time setup
 
 ```powershell

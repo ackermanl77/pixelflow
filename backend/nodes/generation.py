@@ -1,16 +1,15 @@
-import colorsys
-import hashlib
-
-from PIL import Image, ImageDraw, ImageFont
+import torch
 
 from .base import NodeBase, register_node
 
 
-@register_node("CLIP Text Encode (Stub)")
+@register_node("CLIP Text Encode")
 class CLIPTextEncode(NodeBase):
-    """Stands in for a real CLIP text encoder. A real implementation would
-    tokenize `text` and run it through the checkpoint's text encoder to
-    produce an embedding tensor instead of passing the raw string through.
+    """Wraps the prompt text as CONDITIONING. There's no separate embedding
+    step here: KSampler passes this text straight to the loaded pipeline's
+    own `prompt=` argument, which does its own tokenization/CLIP-encoding
+    internally. This node exists so the graph keeps the familiar
+    checkpoint -> conditioning -> sampler shape.
     """
 
     CATEGORY = "conditioning"
@@ -26,23 +25,12 @@ class CLIPTextEncode(NodeBase):
         return ({"text": text},)
 
 
-@register_node("KSampler (Stub)")
+@register_node("KSampler")
 class KSamplerStub(NodeBase):
-    """Deterministic placeholder for real diffusion sampling, so the graph
-    shape (checkpoint -> conditioning -> sampler -> image) matches a real
-    text-to-image pipeline without needing a GPU.
-
-    To wire up real generation once a GPU is available, replace the body of
-    `sample()` with something like:
-
-        import torch
-        from diffusers import StableDiffusionPipeline
-        pipe = StableDiffusionPipeline.from_pretrained(model["name"]).to("cuda")
-        image = pipe(
-            positive["text"], num_inference_steps=steps, guidance_scale=cfg,
-            generator=torch.manual_seed(seed),
-        ).images[0]
-        return (image,)
+    """Runs real Stable Diffusion sampling via the diffusers pipeline that
+    LoadCheckpoint attaches to `model`. `latent_image` only supplies the
+    output width/height (it's a plain RGB PIL.Image, not a real VAE latent),
+    so this is txt2img-only for now - no image-to-image or inpainting.
     """
 
     CATEGORY = "sampling"
@@ -64,31 +52,20 @@ class KSamplerStub(NodeBase):
         }
 
     def sample(self, model, positive, latent_image, seed, steps, cfg):
+        pipe = model["pipeline"]
         text = positive.get("text", "")
         width, height = latent_image.size
-        digest = hashlib.sha256(f"{text}|{seed}".encode()).digest()
-        hue = digest[0] / 255.0
-        r1, g1, b1 = (int(c * 255) for c in colorsys.hsv_to_rgb(hue, 0.55, 0.95))
-        r2, g2, b2 = (int(c * 255) for c in colorsys.hsv_to_rgb((hue + 0.5) % 1.0, 0.6, 0.6))
+        # SD pipelines require dimensions that are multiples of 8.
+        width = max(8, (width // 8) * 8)
+        height = max(8, (height // 8) * 8)
 
-        img = Image.new("RGB", (width, height))
-        pixels = img.load()
-        for y in range(height):
-            t = y / max(height - 1, 1)
-            row = (int(r1 + (r2 - r1) * t), int(g1 + (g2 - g1) * t), int(b1 + (b2 - b1) * t))
-            for x in range(width):
-                pixels[x, y] = row
-
-        draw = ImageDraw.Draw(img)
-        try:
-            font = ImageFont.truetype("arial.ttf", max(12, width // 24))
-        except OSError:
-            font = ImageFont.load_default()
-        label = text.strip() or "(empty prompt)"
-        draw.text(
-            (12, 12),
-            f"[stub render]\n{label}\nsteps={steps} cfg={cfg} seed={seed}",
-            fill=(255, 255, 255),
-            font=font,
+        generator = torch.Generator(device=pipe.device).manual_seed(int(seed))
+        result = pipe(
+            prompt=text,
+            width=width,
+            height=height,
+            num_inference_steps=int(steps),
+            guidance_scale=float(cfg),
+            generator=generator,
         )
-        return (img,)
+        return (result.images[0],)

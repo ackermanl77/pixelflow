@@ -14,16 +14,24 @@ ComfyUI's own frontend uses) for wiring nodes together and running them.
   commands.
 - `docs/NODE_AUTHORING.md` covers adding a new node type.
 - `docs/BUILD.md` covers building the packaged desktop `.exe`.
-- No GPU on this dev machine, so the generation nodes (checkpoint loading,
-  CLIP text encode, sampling) are deterministic CPU-only stubs — see
-  `docs/PROJECT_STATUS.md` for what that means and `docs/NODE_AUTHORING.md`
-  for how to swap in real `diffusers`-based inference later.
+- The generation nodes (checkpoint loading, CLIP text encode, sampling) run
+  real Stable Diffusion inference via `diffusers`/`torch`. Uses a CUDA GPU
+  automatically if available; otherwise falls back to CPU, which works but
+  is slow for anything beyond a distilled few-step model — see
+  `docs/PROJECT_STATUS.md` for details and current limitations (CPU speed,
+  first-run download, txt2img-only).
 
 ## Install
 
 ```powershell
 pip install -r requirements.txt
 ```
+
+This pulls in `torch`, which is a large download (the CPU wheel is a few
+hundred MB). `requirements.txt` installs the default CPU build; if you have
+an NVIDIA GPU and want CUDA acceleration, install a CUDA-enabled `torch`
+build first (see https://pytorch.org/get-started/locally/ for the right
+`--index-url` for your CUDA version) before installing the rest.
 
 ## Run (dev web app)
 
@@ -74,9 +82,10 @@ push or a real release at all, which just builds and uploads the artifact.
 
 ## Nodes included
 
-- **loaders**: Load Checkpoint (stub), Load Image
-- **conditioning**: CLIP Text Encode (stub)
-- **sampling**: KSampler (stub) — deterministic placeholder image generator
+- **loaders**: Load Checkpoint (real `diffusers` Stable Diffusion loading),
+  Load Image
+- **conditioning**: CLIP Text Encode
+- **sampling**: KSampler — real diffusion sampling (GPU if available, else CPU)
 - **image**: Empty Image, Resize, Blur, Brightness/Contrast, Hue/Saturation,
   Blend, Text Overlay — real, CPU-only, Pillow-based operations
 - **output**: Preview Image, Save Image

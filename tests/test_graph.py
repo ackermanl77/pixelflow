@@ -1,7 +1,14 @@
 import pytest
+from huggingface_hub.errors import HfHubHTTPError
+from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from backend.engine.graph import GraphError, execute_prompt
 from backend.paths import OUTPUT_DIR
+
+# A real, randomly-initialized-weights Stable Diffusion pipeline published by
+# the diffusers team specifically for exercising the real pipeline code path
+# in tests without downloading a multi-GB production checkpoint.
+TINY_SD_CHECKPOINT = "hf-internal-testing/tiny-stable-diffusion-torch"
 
 
 def test_execute_prompt_runs_save_image():
@@ -15,9 +22,9 @@ def test_execute_prompt_runs_save_image():
     assert (OUTPUT_DIR / filename).exists()
 
 
-def test_execute_prompt_stub_pipeline():
+def test_execute_prompt_runs_a_real_diffusion_pipeline():
     prompt = {
-        "ckpt": {"class_type": "LoadCheckpoint", "inputs": {"ckpt_name": "stub-v1"}},
+        "ckpt": {"class_type": "LoadCheckpoint", "inputs": {"ckpt_name": TINY_SD_CHECKPOINT}},
         "clip": {"class_type": "CLIPTextEncode", "inputs": {"text": "a red circle"}},
         "latent": {"class_type": "EmptyImage", "inputs": {"width": 32, "height": 32, "color": "#000000"}},
         "sampler": {
@@ -27,13 +34,16 @@ def test_execute_prompt_stub_pipeline():
                 "positive": ["clip", 0],
                 "latent_image": ["latent", 0],
                 "seed": 42,
-                "steps": 10,
+                "steps": 2,
                 "cfg": 7.0,
             },
         },
         "save": {"class_type": "SaveImage", "inputs": {"image": ["sampler", 0], "filename_prefix": "pipeline"}},
     }
-    outputs = execute_prompt(prompt)
+    try:
+        outputs = execute_prompt(prompt)
+    except (HfHubHTTPError, RequestsConnectionError) as exc:
+        pytest.skip(f"Hugging Face Hub unreachable: {exc}")
     filename = outputs["save"]["images"][0]
     assert (OUTPUT_DIR / filename).exists()
 

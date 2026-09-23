@@ -62,20 +62,34 @@ files directly (see `backend/main.py`'s two `app.mount(...)` calls).
 
 ## Nodes included
 
-- **loaders**: Load Checkpoint (stub), Load Image
-- **conditioning**: CLIP Text Encode (stub)
-- **sampling**: KSampler (stub)
+- **loaders**: Load Checkpoint, Load Image
+- **conditioning**: CLIP Text Encode
+- **sampling**: KSampler
 - **image** (real, CPU-only, Pillow-based): Empty Image, Resize, Blur,
   Brightness/Contrast, Hue/Saturation, Blend, Text Overlay
 - **output**: Preview Image, Save Image
 
-The "stub" nodes (`backend/nodes/generation.py`, plus `LoadCheckpoint` in
-`backend/nodes/io_nodes.py`) stand in for real diffusion model inference —
-see [NODE_AUTHORING.md](NODE_AUTHORING.md) for what to replace to wire up
-real GPU-based generation (e.g. `diffusers`) later. This is a deliberate
-scope decision, not a missing feature: there's no GPU on this dev machine, so
-the graph shape and execution engine are built and tested end to end without
-needing one.
+`LoadCheckpoint`/`CLIPTextEncode`/`KSampler` (`backend/nodes/io_nodes.py`,
+`backend/nodes/generation.py`) run real Stable Diffusion inference via
+`diffusers`, no longer a deterministic placeholder. `LoadCheckpoint`
+resolves `ckpt_name` to, in order: a local `.safetensors`/`.ckpt` file under
+`models/checkpoints/`, a local diffusers-format folder there, or otherwise a
+Hugging Face Hub repo id (downloaded and cached on first use — needs
+internet access the first time only). Loaded pipelines are cached in-process
+per `(ckpt_name, device)` since constructing one is expensive. Runs on GPU
+automatically if CUDA is available (`torch.cuda.is_available()`), CPU
+otherwise — CPU inference works but is slow (expect well over a minute per
+image for a full-size SD1.x model at 20 steps; the default checkpoint,
+`stabilityai/sd-turbo`, is a distilled few-step model chosen so the
+out-of-the-box experience is usable on CPU). See
+[NODE_AUTHORING.md](NODE_AUTHORING.md) for the node internals.
+
+`CLIPTextEncode` still just wraps the prompt string as `{"text": ...}`
+rather than running a separate embedding step: `KSampler` passes that string
+straight to the loaded pipeline's own `prompt=` argument, which does its own
+tokenization/CLIP-encoding internally. `latent_image` (from `EmptyImage`)
+only supplies the output width/height — there's no real VAE latent or
+image-to-image/inpainting support, every run is txt2img from scratch.
 
 ## Known limitations
 
@@ -93,6 +107,15 @@ needing one.
   browser tab/window sees every queued prompt's progress.
 - **No authentication.** The server binds to `127.0.0.1` only; it isn't meant
   to be exposed beyond localhost.
+- **Generation is CPU-slow and first-run needs internet.** Without a CUDA
+  GPU, `KSampler` runs on CPU, which is fine for a distilled few-step model
+  like the default `stabilityai/sd-turbo` but slow (minutes per image) for a
+  full-size SD1.x/SDXL checkpoint. The first use of any given `ckpt_name`
+  that isn't already a local file under `models/checkpoints/` triggers a
+  download from the Hugging Face Hub.
+- **txt2img only.** There's no image-to-image or inpainting — `latent_image`
+  only supplies width/height, not real pixel/latent content, so every
+  `KSampler` run generates from scratch.
 
 ## Desktop packaging
 

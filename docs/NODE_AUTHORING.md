@@ -61,41 +61,39 @@ in the sidebar.
   panel already understands (see `frontend/app.js`'s `execution_success`
   handler).
 
-## Wiring up real generation (GPU)
+## Real generation nodes
 
-`backend/nodes/generation.py` (`CLIPTextEncode`, `KSamplerStub`) and
-`LoadCheckpoint` in `backend/nodes/io_nodes.py` are deterministic
-placeholders — no GPU is available on this dev machine, so they produce a
-gradient+label image from the prompt/seed instead of running a real model.
-Each one's docstring says exactly what to change. In short, once a GPU is
-available:
+`LoadCheckpoint` (`backend/nodes/io_nodes.py`), `CLIPTextEncode`, and
+`KSampler` (`backend/nodes/generation.py`) run real Stable Diffusion
+inference via `diffusers`/`torch` — see [PROJECT_STATUS.md](PROJECT_STATUS.md#nodes-included)
+for the checkpoint-resolution rules, caching, and current limitations
+(CPU speed, txt2img-only).
 
-```powershell
-pip install torch diffusers --index-url <the right CUDA wheel index for your GPU>
-```
+A few implementation notes for anyone touching these nodes:
 
-```python
-# backend/nodes/io_nodes.py — LoadCheckpoint.load()
-def load(self, ckpt_name):
-    from diffusers import StableDiffusionPipeline
-    pipe = StableDiffusionPipeline.from_pretrained(ckpt_name).to("cuda")
-    return ({"pipe": pipe},)
-```
-
-```python
-# backend/nodes/generation.py — KSamplerStub.sample()
-def sample(self, model, positive, latent_image, seed, steps, cfg):
-    import torch
-    image = model["pipe"](
-        positive["text"],
-        num_inference_steps=steps,
-        guidance_scale=cfg,
-        generator=torch.manual_seed(seed),
-    ).images[0]
-    return (image,)
-```
+- **Pipelines are cached in-process.** `io_nodes._load_pipeline()` keys a
+  module-level cache by `(ckpt_name, device)` under a lock, because
+  constructing a `StableDiffusionPipeline` is expensive (seconds, multiple
+  GB of weights). Don't remove this cache without replacing it with
+  something equivalent — reloading per node execution would make every
+  generation take minutes even on a GPU.
+- **`ckpt_name` is untrusted input** (it comes from the graph payload posted
+  to `/api/queue`), so local-path resolution goes through `safe_path()`
+  (`backend/paths.py`) rather than a raw `Path` join, to stop it from
+  reading files outside `models/checkpoints/`. A repo id containing `/`
+  (e.g. `stabilityai/sd-turbo`) still resolves to a non-existent local path
+  and falls through to `StableDiffusionPipeline.from_pretrained(ckpt_name)`,
+  which treats it as a Hugging Face Hub id instead.
+- **`KSampler` calls the full pipeline**, not a separate encode/sample split.
+  `CLIPTextEncode` only wraps the prompt as `{"text": ...}`; the pipeline's
+  own `prompt=` argument does its own tokenization and CLIP encoding. This
+  keeps the graph's ComfyUI-shaped node layout without reimplementing
+  `diffusers`' internal encode/denoise loop.
+- **GPU is used automatically** when `torch.cuda.is_available()`, with
+  `float16` on GPU and `float32` on CPU. There's no user-facing device
+  toggle yet.
 
 Nothing in `backend/engine/`, `backend/main.py`, or `frontend/app.js` needs
-to change — they only care about the `INPUT_TYPES`/`RETURN_TYPES` contract,
-never what happens inside a node's function body. This is the same
+to change for this — they only care about the `INPUT_TYPES`/`RETURN_TYPES`
+contract, never what happens inside a node's function body. This is the same
 separation ComfyUI itself relies on for its custom-node ecosystem.

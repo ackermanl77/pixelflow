@@ -10,9 +10,9 @@ a node, see [PROJECT_STATUS.md](PROJECT_STATUS.md) and
 PixelFlow lets you build an image-processing pipeline visually: drag nodes
 onto a canvas, wire their inputs and outputs together, then run the whole
 graph with one click. It's modeled on ComfyUI's node-graph approach, at a
-much smaller scale, and with its "AI generation" nodes currently running as
-CPU-only placeholders rather than real models (see
-[Understanding the stub nodes](#understanding-the-stub-nodes) below).
+much smaller scale. Its "AI generation" nodes run real Stable Diffusion
+inference (see [Generating images](#generating-images) below) — GPU if you
+have one, CPU otherwise (slower, but it works).
 
 ## Starting the app
 
@@ -88,9 +88,9 @@ wait their turn.
 
 ### loaders
 
-- **Load Checkpoint (Stub)** — a `ckpt_name` text field, outputs a `MODEL`.
-  Stands in for loading a real diffusion model checkpoint; see
-  [Understanding the stub nodes](#understanding-the-stub-nodes).
+- **Load Checkpoint** — a `ckpt_name` text field, outputs a `MODEL`. Loads a
+  real Stable Diffusion pipeline; see [Generating images](#generating-images)
+  for what to put in `ckpt_name`.
 - **Load Image** — a `filename` text field, outputs an `IMAGE`. There's no
   upload button in the UI yet: type the exact filename of an image file you
   've placed directly in the project's `uploads\` folder (next to
@@ -98,15 +98,14 @@ wait their turn.
 
 ### conditioning
 
-- **CLIP Text Encode (Stub)** — a multiline `text` box (your prompt),
-  outputs `CONDITIONING`. Stands in for a real CLIP text encoder.
+- **CLIP Text Encode** — a multiline `text` box (your prompt), outputs
+  `CONDITIONING`.
 
 ### sampling
 
-- **KSampler (Stub)** — takes a `MODEL`, `CONDITIONING`, and an `IMAGE` to
-  use as the starting canvas size, plus `seed`/`steps`/`cfg` number fields.
-  Outputs an `IMAGE`. This is the deterministic placeholder "generator" —
-  see below.
+- **KSampler** — takes a `MODEL`, `CONDITIONING`, and an `IMAGE` to use as
+  the output canvas size, plus `seed`/`steps`/`cfg` number fields. Outputs a
+  real generated `IMAGE` — see [Generating images](#generating-images).
 
 ### image (real, CPU-only operations)
 
@@ -134,18 +133,32 @@ Both of these always run when they're part of your graph, even if nothing
 else downstream depends on them — they're the two ways to actually see a
 result.
 
-## Understanding the stub nodes
+## Generating images
 
-**Load Checkpoint**, **CLIP Text Encode**, and **KSampler** are labeled
-"(Stub)" because there's no GPU available to run a real diffusion model
-here. Instead of generating an image from your prompt with an actual model,
-**KSampler (Stub)** produces a deterministic gradient image with your prompt
-text, seed, steps, and cfg printed on it — the same prompt and seed always
-produce the same gradient. This exists so the *shape* of a generation graph
-(checkpoint → prompt → sampler → save) and the queue/execution pipeline are
-real and testable, without pretending to generate actual images. See
-[NODE_AUTHORING.md](NODE_AUTHORING.md) if you later have a GPU and want to
-wire in real generation.
+**Load Checkpoint → CLIP Text Encode → KSampler → Save Image** runs a real
+Stable Diffusion pipeline (via `diffusers`) end to end:
+
+- **`ckpt_name`** on Load Checkpoint can be: the filename of a
+  `.safetensors`/`.ckpt` file (or a diffusers-format folder) you've placed
+  in the project's `models\checkpoints\` folder, or a Hugging Face Hub repo
+  id like `stabilityai/sd-turbo` (the default) or
+  `stable-diffusion-v1-5/stable-diffusion-v1-5`. A repo id is downloaded
+  and cached automatically the first time you use it — that needs internet
+  access once, and can take a while depending on the model's size.
+- PixelFlow uses your GPU automatically if you have a CUDA-capable one and
+  installed a CUDA build of `torch`; otherwise it runs on CPU, which works
+  but is slow — the default `stabilityai/sd-turbo` checkpoint is a
+  distilled model designed to need very few steps, chosen specifically to
+  keep the out-of-the-box CPU experience usable. A full-size SD1.x/SDXL
+  checkpoint at 20+ steps can take minutes per image on CPU.
+- There's no image-to-image or inpainting yet: the `IMAGE` you feed into
+  `latent_image` (typically from **Empty Image**) only sets the output
+  width/height, not its starting content — every run generates from
+  scratch (txt2img only).
+- The first generation after starting the app is slower than the rest: the
+  loaded pipeline is cached in memory, so only the very first run (or the
+  first run after switching to a different `ckpt_name`) pays the loading
+  cost.
 
 ## Saving and loading your work
 
@@ -180,9 +193,10 @@ folder.
 
 **Load Example** clears your current graph and builds a starter one:
 Load Checkpoint → CLIP Text Encode (with a sample prompt already filled in)
-→ Empty Image → KSampler (Stub) → Save Image, fully wired. Use it as a
-quick way to see a full run end to end, or as a starting point to build
-from.
+→ Empty Image → KSampler → Save Image, fully wired. Use it as a quick way
+to see a full run end to end, or as a starting point to build from — the
+first run downloads the default checkpoint if it isn't cached yet, so it's
+slower than later runs.
 
 ## Troubleshooting
 
