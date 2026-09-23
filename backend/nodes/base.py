@@ -1,4 +1,7 @@
+import logging
 from typing import Any, Dict, Tuple, Type
+
+logger = logging.getLogger(__name__)
 
 NODE_REGISTRY: Dict[str, Type["NodeBase"]] = {}
 
@@ -28,6 +31,17 @@ def register_node(display_name: str = ""):
         node_cls.DISPLAY_NAME = display_name or node_cls.__name__
         if not node_cls.RETURN_NAMES:
             node_cls.RETURN_NAMES = node_cls.RETURN_TYPES
+        existing = NODE_REGISTRY.get(node_cls.__name__)
+        if existing is not None and existing is not node_cls:
+            logger.warning(
+                "node class name '%s' is already registered (by %s.%s); "
+                "%s.%s will overwrite it in NODE_REGISTRY",
+                node_cls.__name__,
+                existing.__module__,
+                existing.__qualname__,
+                node_cls.__module__,
+                node_cls.__qualname__,
+            )
         NODE_REGISTRY[node_cls.__name__] = node_cls
         return node_cls
 
