@@ -1,9 +1,10 @@
 import uuid
+from pathlib import Path
 
 from PIL import Image, ImageColor
 
 from .base import NodeBase, register_node
-from ..paths import OUTPUT_DIR, UPLOAD_DIR
+from ..paths import OUTPUT_DIR, UPLOAD_DIR, safe_path
 
 
 @register_node("Load Checkpoint (Stub)")
@@ -59,15 +60,17 @@ class LoadImage(NodeBase):
         return {"required": {"filename": ("STRING", {"default": ""})}}
 
     def load(self, filename):
-        path = UPLOAD_DIR / filename
+        path = safe_path(UPLOAD_DIR, filename)
         return (Image.open(path).convert("RGB"),)
 
 
 def _save(image, prefix, folder):
     folder.mkdir(exist_ok=True)
-    name = f"{prefix}_{uuid.uuid4().hex[:8]}.png"
-    image.save(folder / name)
-    return name
+    safe_prefix = Path(prefix).name or "image"
+    name = f"{safe_prefix}_{uuid.uuid4().hex[:8]}.png"
+    path = safe_path(folder, name)
+    image.save(path)
+    return path.name
 
 
 @register_node("Preview Image")

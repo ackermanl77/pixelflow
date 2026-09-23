@@ -29,3 +29,17 @@ WORKFLOW_DIR = ROOT_DIR / "workflows"
 
 for _dir in (OUTPUT_DIR, UPLOAD_DIR, WORKFLOW_DIR):
     _dir.mkdir(exist_ok=True)
+
+
+class PathTraversalError(ValueError):
+    """Raised when a user-supplied name would resolve outside its base directory."""
+
+
+def safe_path(base: Path, name: str) -> Path:
+    """Resolve `name` against `base`, rejecting any result that escapes `base`
+    (via '..' segments or an absolute path, e.g. from an untrusted request)."""
+    base_resolved = base.resolve()
+    candidate = (base_resolved / name).resolve()
+    if candidate != base_resolved and not candidate.is_relative_to(base_resolved):
+        raise PathTraversalError(f"'{name}' resolves outside {base}")
+    return candidate

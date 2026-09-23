@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -6,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .engine.queue import ConnectionManager, ExecutionQueue
 from .nodes import NODE_REGISTRY
-from .paths import FRONTEND_DIR, OUTPUT_DIR, UPLOAD_DIR, WORKFLOW_DIR
+from .paths import FRONTEND_DIR, OUTPUT_DIR, PathTraversalError, UPLOAD_DIR, WORKFLOW_DIR, safe_path
 
 app = FastAPI(title="PixelFlow")
 manager = ConnectionManager()
@@ -53,10 +54,13 @@ async def get_history():
 
 @app.post("/api/upload")
 async def upload_image(file: UploadFile = File(...)):
-    dest = UPLOAD_DIR / file.filename
+    try:
+        dest = safe_path(UPLOAD_DIR, Path(file.filename).name)
+    except PathTraversalError:
+        raise HTTPException(400, "Invalid filename")
     with open(dest, "wb") as f:
         f.write(await file.read())
-    return {"filename": file.filename}
+    return {"filename": dest.name}
 
 
 @app.get("/api/workflows")
@@ -66,7 +70,10 @@ async def list_workflows():
 
 @app.get("/api/workflows/{name}")
 async def load_workflow(name: str):
-    path = WORKFLOW_DIR / f"{name}.json"
+    try:
+        path = safe_path(WORKFLOW_DIR, f"{name}.json")
+    except PathTraversalError:
+        raise HTTPException(400, "Invalid workflow name")
     if not path.exists():
         raise HTTPException(404, "Workflow not found")
     return JSONResponse(json.loads(path.read_text()))
@@ -74,7 +81,10 @@ async def load_workflow(name: str):
 
 @app.post("/api/workflows/{name}")
 async def save_workflow(name: str, payload: dict):
-    path = WORKFLOW_DIR / f"{name}.json"
+    try:
+        path = safe_path(WORKFLOW_DIR, f"{name}.json")
+    except PathTraversalError:
+        raise HTTPException(400, "Invalid workflow name")
     path.write_text(json.dumps(payload, indent=2))
     return {"saved": name}
 
