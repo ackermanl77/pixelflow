@@ -74,15 +74,19 @@ This mirrors the sibling `photo_professional_tool` project's
 
 1. Installs `requirements.txt` + `requirements-desktop.txt`.
 2. Runs PyInstaller against `PixelFlow.spec`.
-3. Copies the built exe into a version-named folder,
-   `PixelFlow-<version>-Windows\`.
+3. Moves (not copies) the built exe folder to `release\` — the only
+   unpacked copy, so a multi-GB CUDA build is never duplicated on disk.
 4. Downloads (or reuses) a pinned "Fixed Version" copy of the Microsoft Edge
    WebView2 Runtime and bundles it as a sibling `WebView2Runtime\` folder next
    to `PixelFlow.exe` — **the packaged app doesn't depend on the target
    machine having WebView2 installed at all.**
 5. Optionally code-signs the exe (`-Sign -CertificateSubject "..."`).
-6. Compresses to a `.7z` + `.sha256` if `7z` is on `PATH` (otherwise leaves
-   the unpacked folder, with a warning).
+6. Compresses `release\` to `PixelFlow-<version>-Windows.7z` + `.sha256` if
+   `7z` is on `PATH` (otherwise just warns). `-SkipArchive` skips this and
+   removes a stale archive from an earlier build.
+7. Deletes `build-release\` and `dist-release\` after a successful build
+   (`-KeepBuildFiles` keeps PyInstaller's cache for a faster rebuild; a failed
+   build always keeps them for debugging).
 7. Mirrors the result to a fixed-name `release\` folder, so
    `release\PixelFlow.exe` is always where the latest build landed — no need
    to know the version number to find it.

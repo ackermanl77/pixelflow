@@ -9,7 +9,12 @@ param(
     [string]$Python = "",
     # Skip the 7z archive. A CUDA build bundles several GB of libraries, and -mx=9 LZMA over that
     # takes a long time -- skip it when only the unpacked release\ folder is needed.
-    [switch]$SkipArchive
+    [switch]$SkipArchive,
+    # Keep PyInstaller's build-release\ and dist-release\ folders after a successful build instead of
+    # deleting them. build-release\ is PyInstaller's analysis cache, so keeping it makes the next
+    # rebuild faster at the cost of a few hundred MB; dist-release\ is empty either way, since its
+    # output is moved into release\.
+    [switch]$KeepBuildFiles
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,11 +29,14 @@ if (-not (Test-Path $Python)) {
 }
 $Dist = Join-Path $ProjectRoot "dist-release"
 $Build = Join-Path $ProjectRoot "build-release"
-$Package = Join-Path $ProjectRoot "PixelFlow-$Version-Windows"
-$Archive = Join-Path $ProjectRoot "PixelFlow-$Version-Windows.7z"
-# A fixed-name mirror of $Package, so the built .exe always has one stable, predictable place to
-# find it (release\PixelFlow.exe) without having to know the current version number.
+# The only unpacked copy of the finished app: a fixed name, so the built .exe always has one stable,
+# predictable place to find it (release\PixelFlow.exe) without knowing the current version number.
+# Only the distributable archive carries the version in its name.
 $ReleaseFolder = Join-Path $ProjectRoot "release"
+$Archive = Join-Path $ProjectRoot "PixelFlow-$Version-Windows.7z"
+# Older versions of this script also kept a version-named copy of release\ here -- a full duplicate
+# of a multi-GB CUDA build. It's no longer created; a leftover one is removed after a successful build.
+$LegacyPackage = Join-Path $ProjectRoot "PixelFlow-$Version-Windows"
 
 # Microsoft Edge WebView2 Runtime is required to open the app's window at all (pywebview's
 # edgechromium backend needs it). A pinned "Fixed Version" copy is bundled as a sibling
@@ -54,18 +62,25 @@ if (-not (Test-Path $Python)) {
 
 Push-Location $ProjectRoot
 try {
+    # $ErrorActionPreference doesn't cover native commands -- check their exit codes explicitly, so a
+    # failed install or build stops here instead of packaging (and cleaning up around) a stale output.
     & $Python -m pip install -r requirements.txt
+    if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements.txt failed (exit code $LASTEXITCODE)." }
     & $Python -m pip install -r requirements-desktop.txt
+    if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements-desktop.txt failed (exit code $LASTEXITCODE)." }
     & $Python -m PyInstaller --noconfirm --distpath $Dist --workpath $Build PixelFlow.spec
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit code $LASTEXITCODE)." }
 
-    if (Test-Path $Package) { Remove-Item $Package -Recurse -Force }
+    # Move (not copy) PyInstaller's output into release\: on the same drive that's a rename, so the
+    # multi-GB build is never duplicated on disk, not even briefly.
+    if (Test-Path $ReleaseFolder) { Remove-Item $ReleaseFolder -Recurse -Force }
     $oneFolder = Join-Path $Dist "PixelFlow"
     $oneFile = Join-Path $Dist "PixelFlow.exe"
     if (Test-Path $oneFolder) {
-        Copy-Item $oneFolder $Package -Recurse
+        Move-Item $oneFolder $ReleaseFolder
     } elseif (Test-Path $oneFile) {
-        New-Item -ItemType Directory -Path $Package | Out-Null
-        Copy-Item $oneFile (Join-Path $Package "PixelFlow.exe")
+        New-Item -ItemType Directory -Path $ReleaseFolder | Out-Null
+        Move-Item $oneFile (Join-Path $ReleaseFolder "PixelFlow.exe")
     } else {
         throw "PyInstaller output not found in $Dist"
     }
@@ -88,39 +103,44 @@ try {
     if (-not (Test-Path (Join-Path $WebView2RuntimeSource "msedgewebview2.exe"))) {
         throw "WebView2 Runtime extraction did not produce msedgewebview2.exe at $WebView2RuntimeSource"
     }
-    Copy-Item $WebView2RuntimeSource (Join-Path $Package "WebView2Runtime") -Recurse
+    Copy-Item $WebView2RuntimeSource (Join-Path $ReleaseFolder "WebView2Runtime") -Recurse
 
     if ($Sign) {
         if ([string]::IsNullOrWhiteSpace($CertificateSubject)) {
             throw "-CertificateSubject is required when -Sign is used."
         }
-        $exe = Join-Path $Package "PixelFlow.exe"
+        $exe = Join-Path $ReleaseFolder "PixelFlow.exe"
         & signtool sign /sha1 $CertificateSubject /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /a $exe
     }
 
+    $hashPath = "$Archive.sha256"
     $sevenZip = Get-Command 7z -ErrorAction SilentlyContinue
     if ($SkipArchive) {
+        # An archive left over from an earlier build no longer matches release\ -- remove it rather
+        # than leave a stale copy that looks like this build's.
+        foreach ($stale in @($Archive, $hashPath)) {
+            if (Test-Path $stale) { Remove-Item $stale -Force; Write-Host "Removed stale $stale" }
+        }
         Write-Host "Skipping 7z archive (-SkipArchive)."
     } elseif ($sevenZip) {
         if (Test-Path $Archive) { Remove-Item $Archive -Force }
-        & $sevenZip.Source a -t7z -mx=9 -m0=lzma2 -ms=on $Archive (Join-Path $Package "*")
-    } else {
-        Write-Warning "7z was not found. The unpacked package is ready at $Package."
-    }
-
-    $hashPath = "$Archive.sha256"
-    # With -SkipArchive, any $Archive on disk is left over from an earlier build and no longer
-    # matches the release folder -- don't re-hash it and report it as this build's archive.
-    if (-not $SkipArchive -and (Test-Path $Archive)) {
+        & $sevenZip.Source a -t7z -mx=9 -m0=lzma2 -ms=on $Archive (Join-Path $ReleaseFolder "*")
+        if ($LASTEXITCODE -ne 0) { throw "7z failed (exit code $LASTEXITCODE)." }
         (Get-FileHash $Archive -Algorithm SHA256).Hash | Set-Content $hashPath
         Write-Host "Release archive: $Archive"
         Write-Host "SHA-256 file: $hashPath"
+    } else {
+        Write-Warning "7z was not found. The unpacked build is ready at $ReleaseFolder."
     }
-    Write-Host "Release folder: $Package"
+    Write-Host "Release folder: $ReleaseFolder"
 
-    if (Test-Path $ReleaseFolder) { Remove-Item $ReleaseFolder -Recurse -Force }
-    Copy-Item $Package $ReleaseFolder -Recurse
-    Write-Host "Release folder (fixed location): $ReleaseFolder"
+    # Only reached when everything above succeeded -- a failed build keeps its intermediates for
+    # debugging.
+    $leftovers = @($LegacyPackage)
+    if (-not $KeepBuildFiles) { $leftovers += @($Build, $Dist) }
+    foreach ($leftover in $leftovers) {
+        if (Test-Path $leftover) { Remove-Item $leftover -Recurse -Force; Write-Host "Cleaned up $leftover" }
+    }
 } finally {
     Pop-Location
 }
