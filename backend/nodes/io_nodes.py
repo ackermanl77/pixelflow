@@ -1,22 +1,55 @@
+import gc
+import json
 import logging
 import threading
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 
 import torch
 from diffusers import StableDiffusionPipeline
 from PIL import Image, ImageColor
+from PIL.PngImagePlugin import PngInfo
 
-from .base import NodeBase, register_node
+from .base import NodeBase, as_image_list, register_node
 from ..paths import CHECKPOINT_DIR, OUTPUT_DIR, PathTraversalError, UPLOAD_DIR, safe_path, sanitize_filename
 
 logger = logging.getLogger(__name__)
 
 # Constructing a pipeline is expensive (multi-second, multi-GB of weights), so
-# loaded pipelines are cached in-process per (ckpt_name, device) for the life
-# of the server rather than reloaded on every node execution.
-_pipeline_cache: dict[tuple[str, str], StableDiffusionPipeline] = {}
+# loaded pipelines are cached in-process per (ckpt_name, device) rather than
+# reloaded on every node execution. The cache is a small LRU: keeping every
+# checkpoint ever used resident would pin all of them in VRAM for the life of
+# the server, so loading a new one past MAX_CACHED_PIPELINES evicts the least
+# recently used and frees its memory.
+MAX_CACHED_PIPELINES = 1
+_pipeline_cache: "OrderedDict[tuple[str, str], StableDiffusionPipeline]" = OrderedDict()
 _pipeline_cache_lock = threading.Lock()
+
+# torch >= 2.5 exposes torch.OutOfMemoryError; older builds only have the
+# CUDA-specific name (the same class).
+OutOfMemoryError = getattr(torch, "OutOfMemoryError", torch.cuda.OutOfMemoryError)
+
+
+def free_memory() -> None:
+    """Release unreferenced tensors and hand cached CUDA blocks back to the
+    driver. A no-op on CPU-only machines beyond the gc pass."""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def _evict_lru_pipelines(keep: int) -> None:
+    """Drop least-recently-used pipelines until at most `keep` remain.
+    Caller must hold _pipeline_cache_lock."""
+    evicted = False
+    while len(_pipeline_cache) > keep:
+        key, _pipe = _pipeline_cache.popitem(last=False)
+        logger.info("evicting cached pipeline %s to free memory", key)
+        del _pipe
+        evicted = True
+    if evicted:
+        free_memory()
 
 
 def _resolve_device_and_dtype() -> tuple[str, torch.dtype]:
@@ -43,7 +76,12 @@ def _load_pipeline(ckpt_name: str) -> StableDiffusionPipeline:
     with _pipeline_cache_lock:
         cached = _pipeline_cache.get(cache_key)
         if cached is not None:
+            _pipeline_cache.move_to_end(cache_key)
             return cached
+
+        # Free room *before* loading, so the old and new weights never need
+        # to fit in (V)RAM at the same time.
+        _evict_lru_pipelines(MAX_CACHED_PIPELINES - 1)
 
         local_path = _local_checkpoint_path(ckpt_name)
         if local_path is not None and local_path.is_file():
@@ -56,7 +94,18 @@ def _load_pipeline(ckpt_name: str) -> StableDiffusionPipeline:
             logger.info("loading checkpoint '%s' from the Hugging Face Hub", ckpt_name)
             pipe = StableDiffusionPipeline.from_pretrained(ckpt_name, torch_dtype=dtype)
 
-        pipe = pipe.to(device)
+        out_of_memory = False
+        try:
+            pipe = pipe.to(device)
+        except OutOfMemoryError:
+            out_of_memory = True  # freed outside the except block (see KSampler)
+        if out_of_memory:
+            del pipe
+            free_memory()
+            raise RuntimeError(
+                f"Out of GPU memory while loading checkpoint '{ckpt_name}'. Close other GPU "
+                "applications or use a smaller checkpoint."
+            )
         pipe.set_progress_bar_config(disable=True)
         _pipeline_cache[cache_key] = pipe
         return pipe
@@ -123,24 +172,32 @@ class LoadImage(NodeBase):
         return (Image.open(path).convert("RGB"),)
 
 
-def _save(image, prefix, folder):
+# Hidden inputs (never shown as widgets/sockets) the engine injects into the
+# output nodes, the same way ComfyUI embeds the graph into saved PNGs.
+_METADATA_HIDDEN_INPUTS = {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"}
+
+
+def _png_metadata(prompt, extra_pnginfo):
+    """PNG tEXt chunks for a saved image: `prompt` is the executed graph
+    (with any random seed replaced by the seed actually used, so it can be
+    re-queued to reproduce the image), plus each `extra_pnginfo` entry
+    (the frontend sends its litegraph `workflow` there)."""
+    if not prompt and not extra_pnginfo:
+        return None
+    info = PngInfo()
+    if prompt:
+        info.add_text("prompt", json.dumps(prompt))
+    for key, value in (extra_pnginfo or {}).items():
+        info.add_text(str(key), json.dumps(value))
+    return info
+
+
+def _save(image, prefix, folder, pnginfo=None):
     folder.mkdir(exist_ok=True)
     name = f"{sanitize_filename(prefix)}_{uuid.uuid4().hex[:8]}.png"
     path = safe_path(folder, name)
-    image.save(path)
+    image.save(path, pnginfo=pnginfo)
     return path.name
-
-
-def _images_from_input(image):
-    """Normalize an IMAGE input to a list of PIL Images. Most nodes
-    (EmptyImage, LoadImage, the image_ops nodes) still output a single
-    PIL.Image directly, but KSampler outputs a list of one or more images
-    (its `batch_size` input) - accept either shape here so SaveImage/
-    PreviewImage save every image in a batch instead of assuming exactly
-    one."""
-    if isinstance(image, (list, tuple)):
-        return list(image)
-    return [image]
 
 
 @register_node("Preview Image")
@@ -152,10 +209,11 @@ class PreviewImage(NodeBase):
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"image": ("IMAGE",)}}
+        return {"required": {"image": ("IMAGE",)}, "hidden": dict(_METADATA_HIDDEN_INPUTS)}
 
-    def preview(self, image):
-        names = [_save(img, "preview", OUTPUT_DIR) for img in _images_from_input(image)]
+    def preview(self, image, prompt=None, extra_pnginfo=None):
+        pnginfo = _png_metadata(prompt, extra_pnginfo)
+        names = [_save(img, "preview", OUTPUT_DIR, pnginfo) for img in as_image_list(image)]
         return {"images": names}
 
 
@@ -172,9 +230,11 @@ class SaveImage(NodeBase):
             "required": {
                 "image": ("IMAGE",),
                 "filename_prefix": ("STRING", {"default": "PixelFlow"}),
-            }
+            },
+            "hidden": dict(_METADATA_HIDDEN_INPUTS),
         }
 
-    def save(self, image, filename_prefix):
-        names = [_save(img, filename_prefix, OUTPUT_DIR) for img in _images_from_input(image)]
+    def save(self, image, filename_prefix, prompt=None, extra_pnginfo=None):
+        pnginfo = _png_metadata(prompt, extra_pnginfo)
+        names = [_save(img, filename_prefix, OUTPUT_DIR, pnginfo) for img in as_image_list(image)]
         return {"images": names}

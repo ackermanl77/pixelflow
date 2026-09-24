@@ -111,10 +111,18 @@ reproduces the same output for a given sampler/prompt/steps/cfg; the default
 `-1` picks a fresh random seed each run), and `batch_size` (passed as
 `num_images_per_prompt=`, generating more than one image per queue
 submission). `KSampler`'s output is always a list of one or more PIL images
-now (even at `batch_size == 1`), and `SaveImage`/`PreviewImage` save every
-image in that list; other IMAGE-producing nodes (`EmptyImage`, `LoadImage`,
-the `image_ops` nodes) are unaffected and still hand those two nodes a
-single `PIL.Image` directly. `latent_image` (from `EmptyImage`) only
+(even at `batch_size == 1`); `EmptyImage`/`LoadImage` output a single
+`PIL.Image`. Every IMAGE consumer accepts either shape through
+`backend/nodes/base.py`'s `as_image_list()`/`map_images()`/
+`map_image_pairs()` helpers (the `image_ops` nodes map over a batch; Blend
+broadcasts a single image against a batch). `KSampler` reports the seed it
+actually used as `{"seed": N}` in its history/`execution_success` output,
+and Save/Preview Image embed the executed prompt (with that seed filled in)
+and the frontend's litegraph workflow as PNG `tEXt` chunks (`prompt`,
+`workflow`), like ComfyUI. Loaded pipelines live in a 1-entry LRU
+(`MAX_CACHED_PIPELINES` in `io_nodes.py`): switching checkpoints frees the
+previous one's (V)RAM, and a CUDA out-of-memory error is turned into a clear
+message after freeing cached memory. `latent_image` (from `EmptyImage`) only
 supplies the output width/height — there's no real VAE latent or
 image-to-image/inpainting support, every run is txt2img from scratch.
 

@@ -12,6 +12,7 @@ from diffusers import (
 )
 
 from .base import NodeBase, first_image, register_node
+from .io_nodes import OutOfMemoryError, free_memory
 
 # A reasonable subset of diffusers' interchangeable schedulers. Each is
 # swapped onto the cached pipeline via `SchedulerClass.from_config(pipe.scheduler.config)`
@@ -70,7 +71,15 @@ class KSamplerStub(NodeBase):
     CONDITIONING input (wire a second CLIPTextEncode into it) passed through
     as the pipeline's `negative_prompt=`. `batch_size` generates more than
     one image per run via `num_images_per_prompt=`; the output is always a
-    list of one or more PIL images.
+    list of one or more PIL images. The seed actually used (after resolving
+    -1 to a random one) is reported in the node's UI output as `{"seed": N}`,
+    which lands in the prompt's history/`execution_success` message and in
+    Save/Preview Image's embedded PNG metadata.
+
+    For a distilled few-step checkpoint like the default
+    `stabilityai/sd-turbo`, use 1-4 steps and cfg 0: diffusers only applies
+    classifier-free guidance (and the negative prompt) when
+    guidance_scale > 1, and turbo models are trained without it.
     """
 
     CATEGORY = "sampling"
@@ -142,17 +151,34 @@ class KSamplerStub(NodeBase):
             on_progress(step + 1, total_steps)
             return callback_kwargs
 
-        result = pipe(
-            prompt=text,
-            negative_prompt=negative_text,
-            width=width,
-            height=height,
-            num_inference_steps=total_steps,
-            guidance_scale=float(cfg),
-            num_images_per_prompt=int(batch_size),
-            generator=generator,
-            callback_on_step_end=_report_progress if on_progress is not None else None,
-        )
-        # Always a list (even for batch_size == 1) so downstream nodes
-        # (SaveImage/PreviewImage) have one consistent shape to handle.
-        return (list(result.images),)
+        out_of_memory = False
+        try:
+            result = pipe(
+                prompt=text,
+                negative_prompt=negative_text,
+                width=width,
+                height=height,
+                num_inference_steps=total_steps,
+                guidance_scale=float(cfg),
+                num_images_per_prompt=int(batch_size),
+                generator=generator,
+                callback_on_step_end=_report_progress if on_progress is not None else None,
+            )
+        except OutOfMemoryError:
+            # Handled outside the except block: the in-flight exception's
+            # traceback keeps the pipeline call's frames (and their GPU
+            # tensors) alive, so memory can't be freed until it's gone.
+            out_of_memory = True
+        if out_of_memory:
+            # Return the failed run's activations to the driver; the cached
+            # pipeline's weights stay loaded so a smaller retry doesn't have
+            # to reload the checkpoint.
+            free_memory()
+            raise RuntimeError(
+                f"Out of GPU memory while sampling {width}x{height} (batch_size={int(batch_size)}). "
+                "Try a smaller image size or batch_size, or close other GPU applications."
+            )
+        # Always a list (even for batch_size == 1) so every downstream IMAGE
+        # consumer sees one consistent batch shape (see nodes/base.py's
+        # as_image_list/map_images helpers).
+        return {"seed": seed, "result": (list(result.images),)}
