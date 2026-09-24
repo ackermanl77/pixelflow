@@ -7,15 +7,21 @@ from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSock
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .engine.queue import ConnectionManager, ExecutionQueue
 from .nodes import NODE_REGISTRY
 from .paths import FRONTEND_DIR, OUTPUT_DIR, PathTraversalError, UPLOAD_DIR, WORKFLOW_DIR, safe_path
+from .security import ALLOWED_HOSTS, LocalOriginMiddleware
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="PixelFlow")
+# See backend/security.py. add_middleware() wraps outermost-last, so the
+# Host check runs first, then the Origin check.
+app.add_middleware(LocalOriginMiddleware)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 manager = ConnectionManager()
 queue = ExecutionQueue(manager)
 

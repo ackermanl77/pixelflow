@@ -139,8 +139,9 @@ message (a node that never reports progress just leaves the bar hidden).
   WebView2 window.
 - **Single global queue.** There's no per-client isolation — every connected
   browser tab/window sees every queued prompt's progress.
-- **No authentication.** The server binds to `127.0.0.1` only; it isn't meant
-  to be exposed beyond localhost.
+- **No authentication.** The server binds to `127.0.0.1` only and rejects
+  non-loopback `Host` headers and cross-origin state-changing requests /
+  WebSocket connections; it isn't meant to be exposed beyond localhost.
 - **Generation is CPU-slow and first-run needs internet.** Without a CUDA
   GPU, `KSampler` runs on CPU, which is fine for a distilled few-step model
   like the default `stabilityai/sd-turbo` but slow (minutes per image) for a

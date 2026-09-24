@@ -229,17 +229,31 @@ function renderQueueEntry(promptId) {
   return el;
 }
 
+// Server-provided text (error messages, filenames, prompt ids) is only ever
+// inserted via textContent / DOM properties, never innerHTML, so it can't
+// inject markup or script into the page.
 function setQueueStatus(promptId, statusClass, text) {
   const el = renderQueueEntry(promptId);
-  el.innerHTML = `<span class="${statusClass}">${text}</span>`;
+  el.replaceChildren();
+  const label = document.createElement("span");
+  label.className = statusClass;
+  label.textContent = text;
+  el.appendChild(label);
 }
 
 function addGalleryImage(filename, promptId) {
   const gallery = document.getElementById("gallery");
+  const url = `/outputs/${encodeURIComponent(filename)}`;
   const item = document.createElement("div");
   item.className = "gallery-item";
-  item.innerHTML = `<img src="/outputs/${filename}" alt="${filename}" /><div class="caption">${filename}</div>`;
-  item.querySelector("img").onclick = () => openLightbox(`/outputs/${filename}`);
+  const img = document.createElement("img");
+  img.src = url;
+  img.alt = filename;
+  img.onclick = () => openLightbox(url);
+  const caption = document.createElement("div");
+  caption.className = "caption";
+  caption.textContent = filename;
+  item.append(img, caption);
   gallery.prepend(item);
 }
 
@@ -429,8 +443,15 @@ async function refreshWorkflowList() {
   const res = await fetch("/api/workflows");
   const names = await res.json();
   const sel = document.getElementById("workflow-select");
-  sel.innerHTML = '<option value="">Load workflow...</option>' +
-    names.map((n) => `<option value="${n}">${n}</option>`).join("");
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Load workflow...";
+  sel.replaceChildren(placeholder, ...names.map((n) => {
+    const opt = document.createElement("option");
+    opt.value = n;
+    opt.textContent = n;
+    return opt;
+  }));
 }
 
 function findInputSlot(node, name) {
