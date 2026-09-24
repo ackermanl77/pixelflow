@@ -39,9 +39,17 @@ files directly (see `backend/main.py`'s two `app.mount(...)` calls).
   (`queued`/`executing`/`execution_success`/`execution_error`, plus
   per-step `progress` messages — see below) streams to the browser over
   `/ws`.
-- **`backend/main.py`** — the FastAPI app: `GET /api/nodes` (registry as
-  JSON), `POST /api/queue`, `GET /api/history`, `POST /api/upload`,
-  `GET|POST /api/workflows[/{name}]`, and the `/ws` websocket. Mounts
+- **`backend/main.py`** — the FastAPI app: `GET /api/health` (returns
+  `{"app": "pixelflow"}`; `desktop.py` polls it so another app on the same
+  port, e.g. ComfyUI, isn't mistaken for PixelFlow), `GET /api/nodes`
+  (registry as JSON), `POST /api/queue` (runs `validate_prompt()` first and
+  returns 400 naming the bad node), `POST /api/interrupt` (stops the running
+  prompt at its next node or diffusion step), `DELETE /api/queue/{id}`
+  (cancel a pending prompt), `GET /api/history`, `POST /api/upload`
+  (Pillow-verified images only; a name collision gets `_1`, `_2`, ...),
+  `GET|POST /api/workflows[/{name}]`, and the `/ws` websocket. Host/Origin
+  checks live in `backend/security.py`. Default port is **8288** (not
+  ComfyUI's 8188). Mounts
   `/outputs` (generated images) and `/` (the frontend) as static files.
 - **`backend/paths.py`** — resolves two different roots so the packaged exe
   works correctly: `BUNDLE_DIR` (read-only bundled resources — `frontend/`,
@@ -127,11 +135,10 @@ message (a node that never reports progress just leaves the bar hidden).
 
 ## Known limitations
 
-- **No node validation.** The engine doesn't check that a socket's declared
-  type matches what's connected (e.g. wiring an `IMAGE` output into a
-  `CONDITIONING` input fails at execution time with whatever Python error
-  the node function raises, not with a friendlier upfront graph-validation
-  error).
+- **Validation is structural only.** `validate_prompt()` checks required
+  inputs, link targets/output indexes/socket types, number ranges and combo
+  values, but not semantic values (e.g. an invalid hex color or a missing
+  upload file still fails at execution time).
 - **`window.prompt()`** is used for naming a workflow on **Save Workflow**.
   This doesn't render in every embedded/automated browser context (it did
   not appear in this project's own automated browser-based testing), but

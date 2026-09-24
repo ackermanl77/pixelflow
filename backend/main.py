@@ -11,6 +11,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .engine.graph import PromptValidationError, validate_prompt
 from .engine.queue import ConnectionManager, ExecutionQueue
 from .nodes import NODE_REGISTRY
 from .paths import FRONTEND_DIR, OUTPUT_DIR, PathTraversalError, UPLOAD_DIR, WORKFLOW_DIR, safe_path, sanitize_filename
@@ -51,6 +52,9 @@ class NodeSpec(BaseModel):
 
 class QueueRequest(BaseModel):
     prompt: Dict[str, NodeSpec]
+    # ComfyUI's shape: {"extra_pnginfo": {"workflow": <litegraph graph>}} -
+    # embedded into saved PNGs next to the prompt itself.
+    extra_data: Dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkflowPayload(BaseModel):
@@ -94,8 +98,22 @@ async def post_queue(request: QueueRequest):
     if not request.prompt:
         raise HTTPException(400, "Missing 'prompt'")
     prompt = {node_id: spec.model_dump() for node_id, spec in request.prompt.items()}
-    prompt_id = await queue.submit(prompt)
+    try:
+        prompt = validate_prompt(prompt)
+    except PromptValidationError as exc:
+        raise HTTPException(400, str(exc)) from None
+    extra_pnginfo = request.extra_data.get("extra_pnginfo") or {}
+    if not isinstance(extra_pnginfo, dict):
+        raise HTTPException(400, "'extra_data.extra_pnginfo' must be an object")
+    prompt_id = await queue.submit(prompt, extra_pnginfo)
     return {"prompt_id": prompt_id}
+
+
+@app.post("/api/interrupt")
+async def interrupt_prompt():
+    """Stop the currently running prompt at its next node or diffusion step."""
+    prompt_id = queue.interrupt()
+    return {"interrupted": prompt_id}
 
 
 @app.get("/api/history")

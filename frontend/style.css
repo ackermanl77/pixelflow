@@ -251,6 +251,18 @@ button.primary:hover { background: var(--accent-hover); }
 .queue-entry .status-running { color: #e6b422; }
 .queue-entry .status-completed { color: #58c46b; }
 .queue-entry .status-error { color: #e05c5c; }
+.queue-entry .status-cancelled { color: var(--text-dim); font-style: italic; }
+.queue-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.queue-entry > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.queue-entry .queue-action {
+  flex: none;
+  padding: 2px 8px;
+  font-size: 11px;
+}
 
 #gallery {
   display: grid;

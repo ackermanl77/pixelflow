@@ -239,6 +239,35 @@ function setQueueStatus(promptId, statusClass, text) {
   label.className = statusClass;
   label.textContent = text;
   el.appendChild(label);
+
+  if (statusClass === "status-queued") {
+    el.appendChild(queueActionButton("Cancel", "Remove from the queue", () => cancelQueued(promptId)));
+  } else if (statusClass === "status-running") {
+    el.appendChild(queueActionButton("Cancel", "Stop this run", interruptRunning));
+  }
+}
+
+function queueActionButton(text, title, onClick) {
+  const btn = document.createElement("button");
+  btn.className = "queue-action";
+  btn.textContent = text;
+  btn.title = title;
+  btn.onclick = async () => {
+    btn.disabled = true;
+    await onClick();
+  };
+  return btn;
+}
+
+async function cancelQueued(promptId) {
+  const res = await fetch(`/api/queue/${encodeURIComponent(promptId)}`, { method: "DELETE" });
+  // 404 means it already started running (or finished) -- the websocket
+  // messages for that will update this entry, so there's nothing to do here.
+  if (res.ok) setQueueStatus(promptId, "status-cancelled", `Cancelled: ${promptId}`);
+}
+
+async function interruptRunning() {
+  await fetch("/api/interrupt", { method: "POST" });
 }
 
 function addGalleryImage(filename, promptId) {
@@ -331,14 +360,25 @@ function connectWebSocket() {
     } else if (msg.type === "progress") {
       showProgress(msg.node_id, msg.step, msg.total);
     } else if (msg.type === "execution_success") {
-      setQueueStatus(msg.prompt_id, "status-completed", `Done: ${msg.prompt_id}`);
+      const outputs = Object.values(msg.outputs || {});
+      // KSampler reports the seed it actually used (a random one when its
+      // seed widget is -1), so a result can be reproduced.
+      const seeds = outputs.filter((o) => o.seed !== undefined).map((o) => o.seed);
+      const seedText = seeds.length ? ` (seed ${seeds.join(", ")})` : "";
+      setQueueStatus(msg.prompt_id, "status-completed", `Done: ${msg.prompt_id}${seedText}`);
       clearExecutingHighlight();
       hideProgress();
-      for (const nodeOutput of Object.values(msg.outputs || {})) {
+      for (const nodeOutput of outputs) {
         for (const filename of nodeOutput.images || []) {
           addGalleryImage(filename, msg.prompt_id);
         }
       }
+    } else if (msg.type === "execution_cancelled") {
+      setQueueStatus(msg.prompt_id, "status-cancelled", `Cancelled: ${msg.prompt_id}`);
+    } else if (msg.type === "execution_interrupted") {
+      setQueueStatus(msg.prompt_id, "status-cancelled", `Interrupted: ${msg.prompt_id}`);
+      clearExecutingHighlight();
+      hideProgress();
     } else if (msg.type === "execution_error") {
       setQueueStatus(msg.prompt_id, "status-error", `Error: ${msg.prompt_id} — ${msg.error}`);
       clearExecutingHighlight();
@@ -503,10 +543,17 @@ function initUI() {
     const res = await fetch("/api/queue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: execPrompt }),
+      // The litegraph workflow rides along so Save/Preview Image can embed it
+      // in the PNG (ComfyUI's extra_data.extra_pnginfo shape).
+      body: JSON.stringify({ prompt: execPrompt, extra_data: { extra_pnginfo: { workflow: graph.serialize() } } }),
     });
     if (!res.ok) {
-      alert("Failed to queue prompt: " + (await res.text()));
+      const body = await res.text();
+      let detail = body;
+      try {
+        detail = JSON.parse(body).detail ?? body;
+      } catch (_) { /* not JSON -- show it as-is */ }
+      alert("Failed to queue prompt: " + (typeof detail === "string" ? detail : JSON.stringify(detail)));
       return;
     }
     const data = await res.json();

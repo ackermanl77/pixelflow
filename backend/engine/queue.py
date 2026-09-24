@@ -1,11 +1,12 @@
 import asyncio
 import logging
+import threading
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import WebSocket
 
-from .graph import execute_prompt
+from .graph import ExecutionInterrupted, execute_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -45,16 +46,30 @@ class ExecutionQueue:
 
     def __init__(self, manager: ConnectionManager, max_history: int = DEFAULT_MAX_HISTORY) -> None:
         self.manager = manager
-        self.pending: "asyncio.Queue[tuple[str, dict]]" = asyncio.Queue()
+        self.pending: "asyncio.Queue[tuple[str, dict, dict]]" = asyncio.Queue()
         self.history: Dict[str, Any] = {}
         self.max_history = max_history
         self._cancelled: set = set()
         self._worker_task: Any = None
+        self.running_prompt_id: Optional[str] = None
+        # Set by interrupt(), polled by execute_prompt() between nodes and on
+        # every KSampler diffusion step (via its on_progress callback) from
+        # the worker thread - hence a threading.Event, not an asyncio one.
+        self._interrupt_event = threading.Event()
+
+    def interrupt(self) -> Optional[str]:
+        """Ask the currently running prompt to stop at its next checkpoint
+        (the next node, or the next diffusion step). Returns the running
+        prompt's id, or None if nothing is running."""
+        prompt_id = self.running_prompt_id
+        if prompt_id is not None:
+            self._interrupt_event.set()
+        return prompt_id
 
     def cancel(self, prompt_id: str) -> bool:
         """Cancel a prompt that is still queued. Returns False for an unknown
-        id or one that's already running/finished: a running prompt executes
-        synchronously in a worker thread and can't be safely interrupted."""
+        id or one that's already running/finished - use interrupt() to stop
+        the running one."""
         entry = self.history.get(prompt_id)
         if entry is None or entry.get("status") != "queued":
             return False
@@ -83,21 +98,25 @@ class ExecutionQueue:
         if self._worker_task is None:
             self._worker_task = asyncio.create_task(self._worker())
 
-    async def submit(self, prompt: Dict[str, Any]) -> str:
+    async def submit(self, prompt: Dict[str, Any], extra_pnginfo: Optional[Dict[str, Any]] = None) -> str:
+        """Queue a prompt. `extra_pnginfo` (e.g. {"workflow": <litegraph
+        graph>}) is embedded into saved PNGs alongside the prompt itself."""
         prompt_id = uuid.uuid4().hex[:12]
         self._record_history(prompt_id, {"status": "queued"})
-        await self.pending.put((prompt_id, prompt))
+        await self.pending.put((prompt_id, prompt, extra_pnginfo or {}))
         await self.manager.broadcast({"type": "queued", "prompt_id": prompt_id})
         return prompt_id
 
     async def _worker(self) -> None:
         loop = asyncio.get_event_loop()
         while True:
-            prompt_id, prompt = await self.pending.get()
+            prompt_id, prompt, extra_pnginfo = await self.pending.get()
             if prompt_id in self._cancelled:
                 self._cancelled.discard(prompt_id)
                 self.pending.task_done()
                 continue
+            self._interrupt_event.clear()
+            self.running_prompt_id = prompt_id
             self._record_history(prompt_id, {"status": "running"})
             await self.manager.broadcast({"type": "execution_start", "prompt_id": prompt_id})
 
@@ -130,12 +149,23 @@ class ExecutionQueue:
 
             try:
                 result = await loop.run_in_executor(
-                    None, lambda: execute_prompt(prompt, on_node_start, on_progress)
+                    None,
+                    lambda: execute_prompt(
+                        prompt,
+                        on_node_start,
+                        on_progress,
+                        should_interrupt=self._interrupt_event.is_set,
+                        extra_pnginfo=extra_pnginfo,
+                    ),
                 )
                 self._record_history(prompt_id, {"status": "completed", "outputs": result})
                 await self.manager.broadcast(
                     {"type": "execution_success", "prompt_id": prompt_id, "outputs": result}
                 )
+            except ExecutionInterrupted:
+                logger.info("prompt %s was interrupted", prompt_id)
+                self._record_history(prompt_id, {"status": "interrupted"})
+                await self.manager.broadcast({"type": "execution_interrupted", "prompt_id": prompt_id})
             except Exception as exc:  # noqa: BLE001 - surface any node error to the client
                 logger.exception("prompt %s failed during execution", prompt_id)
                 self._record_history(prompt_id, {"status": "error", "error": str(exc)})
@@ -143,4 +173,6 @@ class ExecutionQueue:
                     {"type": "execution_error", "prompt_id": prompt_id, "error": str(exc)}
                 )
             finally:
+                self.running_prompt_id = None
+                self._interrupt_event.clear()
                 self.pending.task_done()

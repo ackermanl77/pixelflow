@@ -82,7 +82,16 @@ runs it node by node. Watch the **Queue** panel on the right:
   exist).
 
 Nothing runs in parallel — prompts you queue while one is still running
-wait their turn.
+wait their turn. Each queued or running entry has a **Cancel** button: on a
+queued prompt it removes it from the queue; on the running one it stops it
+at the next node or sampling step (shown as *Interrupted*). A finished
+KSampler run shows the seed it used (e.g. *Done: … (seed 123456)*) — type
+that into `seed` to reproduce the image. Saved PNGs also embed the graph and
+seed as metadata.
+
+If the graph has a problem (an unconnected required input, a wire between
+incompatible sockets, an out-of-range number), **Queue Prompt** refuses it
+straight away with a message naming the node.
 
 ## The node library, category by category
 
