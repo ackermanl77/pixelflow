@@ -54,10 +54,21 @@ in the sidebar.
 - **`FUNCTION`** — the method name the engine calls, given the resolved
   inputs as keyword arguments matching `INPUT_TYPES()`'s names. Return a
   tuple matching `RETURN_TYPES`'s length and order.
+- **IMAGE values may be a single `PIL.Image` or a list** (KSampler outputs a
+  batch list). Don't assume one: wrap your per-image work with
+  `map_images(image, fn)` (or `map_image_pairs()` for two IMAGE inputs, or
+  `as_image_list()`) from `backend/nodes/base.py`.
+- **`"hidden"`** in `INPUT_TYPES()` (e.g. `{"prompt": "PROMPT",
+  "extra_pnginfo": "EXTRA_PNGINFO"}`) asks the engine to inject the executed
+  prompt / extra PNG info (the frontend workflow) — see `SaveImage`.
+- **Validation**: `POST /api/queue` checks every graph against
+  `INPUT_TYPES()` (required inputs, socket types, `min`/`max`, combo lists)
+  before queueing, so declare accurate `min`/`max` values.
 - **`OUTPUT_NODE = True`** — for terminal nodes with no outputs of their own
   (like `SaveImage`/`PreviewImage`) that should always run even if nothing
-  downstream consumes them. Return a dict instead of a tuple —
-  `{"images": [filename, ...]}` is the convention the frontend's gallery
+  downstream consumes them. Return a dict instead of a tuple (any node
+  may: a dict's `"result"` key holds its output tuple, the rest is UI output
+  recorded in history) — `{"images": [filename, ...]}` is the convention the frontend's gallery
   panel already understands (see `frontend/app.js`'s `execution_success`
   handler).
 
@@ -72,7 +83,9 @@ for the checkpoint-resolution rules, caching, and current limitations
 A few implementation notes for anyone touching these nodes:
 
 - **Pipelines are cached in-process.** `io_nodes._load_pipeline()` keys a
-  module-level cache by `(ckpt_name, device)` under a lock, because
+  module-level LRU cache (`MAX_CACHED_PIPELINES`, default 1; evicted
+  pipelines are dropped and CUDA memory emptied) by `(ckpt_name, device)`
+  under a lock, because
   constructing a `StableDiffusionPipeline` is expensive (seconds, multiple
   GB of weights). Don't remove this cache without replacing it with
   something equivalent — reloading per node execution would make every

@@ -95,6 +95,20 @@ Adding a new node is a single Python class — see `docs/NODE_AUTHORING.md`.
 ## Tests
 
 ```powershell
-pip install pytest
-python -m pytest tests/
+pip install pytest httpx
+python -m pytest -q
 ```
+
+`pytest.ini` limits collection to `tests/` (a bare `pytest` otherwise walks
+into `release/_internal/` and the venv). Tests write only to per-test temp
+folders, never the real `outputs/`/`uploads/`. The real-pipeline tests use
+the tiny `hf-internal-testing/tiny-stable-diffusion-torch` checkpoint and
+skip themselves if the Hugging Face Hub is unreachable.
+`.github/workflows/ci.yml` runs the suite on every push/PR with CPU `torch`.
+
+## Security
+
+The server binds to `127.0.0.1` and additionally rejects requests whose
+`Host` isn't `127.0.0.1`/`localhost` (DNS rebinding) and state-changing
+requests / WebSocket connections whose `Origin` isn't the app's own
+(`backend/security.py`), so a web page open in your browser can't drive it.
