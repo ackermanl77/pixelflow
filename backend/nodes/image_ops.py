@@ -1,6 +1,6 @@
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
-from .base import NodeBase, register_node
+from .base import NodeBase, map_image_pairs, map_images, register_node
 
 
 @register_node("Resize Image")
@@ -21,7 +21,8 @@ class ImageResize(NodeBase):
         }
 
     def run(self, image, width, height):
-        return (image.resize((int(width), int(height)), Image.LANCZOS),)
+        size = (int(width), int(height))
+        return (map_images(image, lambda img: img.resize(size, Image.LANCZOS)),)
 
 
 @register_node("Blur")
@@ -41,7 +42,8 @@ class ImageBlur(NodeBase):
         }
 
     def run(self, image, radius):
-        return (image.filter(ImageFilter.GaussianBlur(radius=float(radius))),)
+        blur = ImageFilter.GaussianBlur(radius=float(radius))
+        return (map_images(image, lambda img: img.filter(blur)),)
 
 
 @register_node("Brightness / Contrast")
@@ -62,9 +64,11 @@ class ImageBrightnessContrast(NodeBase):
         }
 
     def run(self, image, brightness, contrast):
-        out = ImageEnhance.Brightness(image).enhance(float(brightness))
-        out = ImageEnhance.Contrast(out).enhance(float(contrast))
-        return (out,)
+        def _adjust(img):
+            out = ImageEnhance.Brightness(img).enhance(float(brightness))
+            return ImageEnhance.Contrast(out).enhance(float(contrast))
+
+        return (map_images(image, _adjust),)
 
 
 @register_node("Hue / Saturation")
@@ -85,13 +89,15 @@ class ImageHueSaturation(NodeBase):
         }
 
     def run(self, image, hue_shift_degrees, saturation):
-        hsv = image.convert("HSV")
-        h, s, v = hsv.split()
         shift = int((float(hue_shift_degrees) / 360.0) * 255)
-        h = h.point(lambda p: (p + shift) % 256)
-        s = s.point(lambda p: max(0, min(255, int(p * float(saturation)))))
-        out = Image.merge("HSV", (h, s, v)).convert("RGB")
-        return (out,)
+
+        def _adjust(img):
+            h, s, v = img.convert("HSV").split()
+            h = h.point(lambda p: (p + shift) % 256)
+            s = s.point(lambda p: max(0, min(255, int(p * float(saturation)))))
+            return Image.merge("HSV", (h, s, v)).convert("RGB")
+
+        return (map_images(image, _adjust),)
 
 
 @register_node("Blend")
@@ -113,16 +119,18 @@ class ImageBlend(NodeBase):
         }
 
     def run(self, base, overlay, mode, opacity):
-        base = base.convert("RGB")
-        overlay = overlay.resize(base.size).convert("RGB")
-        if mode == "multiply":
-            blended = ImageChops.multiply(base, overlay)
-        elif mode == "screen":
-            blended = ImageChops.screen(base, overlay)
-        else:
-            blended = overlay
-        out = Image.blend(base, blended, float(opacity))
-        return (out,)
+        def _blend(base_img, overlay_img):
+            base_img = base_img.convert("RGB")
+            overlay_img = overlay_img.resize(base_img.size).convert("RGB")
+            if mode == "multiply":
+                blended = ImageChops.multiply(base_img, overlay_img)
+            elif mode == "screen":
+                blended = ImageChops.screen(base_img, overlay_img)
+            else:
+                blended = overlay_img
+            return Image.blend(base_img, blended, float(opacity))
+
+        return (map_image_pairs(base, overlay, _blend),)
 
 
 @register_node("Text Overlay")
@@ -146,11 +154,14 @@ class ImageTextOverlay(NodeBase):
         }
 
     def run(self, image, text, x, y, size, color):
-        out = image.copy()
-        draw = ImageDraw.Draw(out)
         try:
             font = ImageFont.truetype("arial.ttf", int(size))
         except OSError:
             font = ImageFont.load_default()
-        draw.text((int(x), int(y)), text, fill=color, font=font)
-        return (out,)
+
+        def _draw(img):
+            out = img.copy()
+            ImageDraw.Draw(out).text((int(x), int(y)), text, fill=color, font=font)
+            return out
+
+        return (map_images(image, _draw),)

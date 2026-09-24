@@ -11,7 +11,7 @@ from diffusers import (
     PNDMScheduler,
 )
 
-from .base import NodeBase, register_node
+from .base import NodeBase, first_image, register_node
 
 # A reasonable subset of diffusers' interchangeable schedulers. Each is
 # swapped onto the cached pipeline via `SchedulerClass.from_config(pipe.scheduler.config)`
@@ -118,7 +118,9 @@ class KSamplerStub(NodeBase):
         text = positive.get("text", "")
         negative_text = negative.get("text", "") if negative else None
 
-        width, height = latent_image.size
+        # latent_image may be a batch (e.g. another KSampler's output); only
+        # its size matters here.
+        width, height = first_image(latent_image).size
         # SD pipelines require dimensions that are multiples of 8.
         width = max(8, (width // 8) * 8)
         height = max(8, (height // 8) * 8)

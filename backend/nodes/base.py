@@ -46,3 +46,55 @@ def register_node(display_name: str = ""):
         return node_cls
 
     return _wrap
+
+
+# ---- IMAGE socket helpers ----
+#
+# An IMAGE value flowing between nodes is either a single PIL.Image (EmptyImage,
+# LoadImage) or a list of them (KSampler always outputs a list, one entry per
+# `batch_size` image). Every node that consumes IMAGE should go through these
+# helpers rather than assuming one shape, so any IMAGE output can be wired into
+# any IMAGE input.
+
+
+def as_image_list(image) -> list:
+    """Normalize an IMAGE input to a list of PIL Images."""
+    if isinstance(image, (list, tuple)):
+        if not image:
+            raise ValueError("received an empty image batch")
+        return list(image)
+    return [image]
+
+
+def first_image(image):
+    """The first image of an IMAGE input (for nodes that only need one, e.g.
+    KSampler reading the output size from `latent_image`)."""
+    return as_image_list(image)[0]
+
+
+def map_images(image, fn):
+    """Apply `fn` to every image in an IMAGE input, preserving its shape: a
+    single image in -> a single image out, a batch (list) in -> a list out."""
+    if isinstance(image, (list, tuple)):
+        return [fn(img) for img in as_image_list(image)]
+    return fn(image)
+
+
+def map_image_pairs(first, second, fn):
+    """Like map_images() for a node with two IMAGE inputs (e.g. Blend). A
+    single image on either side is broadcast against every image of a batch
+    on the other side; two batches are paired up element-wise and must be
+    the same length. Returns a list if either input was a batch."""
+    is_batch = isinstance(first, (list, tuple)) or isinstance(second, (list, tuple))
+    firsts, seconds = as_image_list(first), as_image_list(second)
+    if len(firsts) != len(seconds):
+        if len(firsts) == 1:
+            firsts = firsts * len(seconds)
+        elif len(seconds) == 1:
+            seconds = seconds * len(firsts)
+        else:
+            raise ValueError(
+                f"cannot pair image batches of different sizes ({len(firsts)} vs {len(seconds)})"
+            )
+    results = [fn(a, b) for a, b in zip(firsts, seconds)]
+    return results if is_batch else results[0]
