@@ -437,18 +437,30 @@ function findInputSlot(node, name) {
   return node.inputs.findIndex((i) => i.name === name);
 }
 
+function setNodeValue(node, name, value) {
+  node.properties[name] = value;
+  const widget = (node.widgets || []).find((w) => w.name === name);
+  if (widget) widget.value = value;
+}
+
 function loadExampleGraph() {
   graph.clear();
 
   const ckpt = addNodeToGraph("LoadCheckpoint", [50, 120]);
 
   const clip = addNodeToGraph("CLIPTextEncode", [320, 40]);
-  clip.properties.text = "a scenic mountain lake at sunrise, cinematic lighting";
-  if (clip.widgets && clip.widgets[0]) clip.widgets[0].value = clip.properties.text;
+  setNodeValue(clip, "text", "a scenic mountain lake at sunrise, cinematic lighting");
 
   const empty = addNodeToGraph("EmptyImage", [320, 260]);
 
+  // The default checkpoint (stabilityai/sd-turbo) is a distilled few-step
+  // model trained without classifier-free guidance: its model card uses
+  // 1-4 steps at guidance_scale 0 (diffusers skips CFG entirely at <= 1).
+  // KSampler's own 20-step / cfg 7 defaults are for regular SD checkpoints
+  // and give washed-out, slow results here.
   const sampler = addNodeToGraph("KSamplerStub", [640, 120]);
+  setNodeValue(sampler, "steps", 4);
+  setNodeValue(sampler, "cfg", 0);
 
   const save = addNodeToGraph("SaveImage", [960, 120]);
 

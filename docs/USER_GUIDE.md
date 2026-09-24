@@ -193,7 +193,10 @@ folder.
 
 **Load Example** clears your current graph and builds a starter one:
 Load Checkpoint → CLIP Text Encode (with a sample prompt already filled in)
-→ Empty Image → KSampler → Save Image, fully wired. Use it as a quick way
+→ Empty Image → KSampler → Save Image, fully wired. Its KSampler is set to
+4 steps and cfg 0, which is what the default `stabilityai/sd-turbo`
+checkpoint is designed for; raise them (e.g. 20–30 steps, cfg ~7) if you
+switch to a regular SD1.x checkpoint. Use it as a quick way
 to see a full run end to end, or as a starting point to build from — the
 first run downloads the default checkpoint if it isn't cached yet, so it's
 slower than later runs.
