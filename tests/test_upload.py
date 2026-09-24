@@ -6,7 +6,6 @@ from fastapi import HTTPException
 from starlette.datastructures import Headers, UploadFile
 
 from backend import main
-from backend.paths import UPLOAD_DIR
 
 PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02"
@@ -34,11 +33,8 @@ def test_upload_rejects_oversized_file(monkeypatch):
     assert exc_info.value.status_code == 413
 
 
-def test_upload_accepts_a_valid_png():
+def test_upload_accepts_a_valid_png(upload_dir):
     file = _upload("sample.png", PNG_BYTES, "image/png")
-    try:
-        result = asyncio.run(main.upload_image(file))
-        assert result == {"filename": "sample.png"}
-        assert (UPLOAD_DIR / "sample.png").read_bytes() == PNG_BYTES
-    finally:
-        (UPLOAD_DIR / "sample.png").unlink(missing_ok=True)
+    result = asyncio.run(main.upload_image(file))
+    assert result == {"filename": "sample.png"}
+    assert (upload_dir / "sample.png").read_bytes() == PNG_BYTES

@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      # Install the CPU-only torch wheel first so requirements.txt's `torch>=2.4` is already
+      # satisfied and pip doesn't pull the multi-GB CUDA build onto a GPU-less runner.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements.txt pytest httpx
+
+      # Cache the tiny test checkpoint (hf-internal-testing/tiny-stable-diffusion-torch) the
+      # real-pipeline tests download; they skip themselves if the Hub is unreachable.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-tiny-sd-v1
+
+      - name: Run tests
+        run: python -m pytest -q

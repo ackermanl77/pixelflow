@@ -4,7 +4,6 @@ from PIL import Image
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from backend.engine.graph import GraphError, execute_prompt
-from backend.paths import OUTPUT_DIR
 
 # A real, randomly-initialized-weights Stable Diffusion pipeline published by
 # the diffusers team specifically for exercising the real pipeline code path
@@ -12,7 +11,7 @@ from backend.paths import OUTPUT_DIR
 TINY_SD_CHECKPOINT = "hf-internal-testing/tiny-stable-diffusion-torch"
 
 
-def test_execute_prompt_runs_save_image():
+def test_execute_prompt_runs_save_image(output_dir):
     prompt = {
         "1": {"class_type": "EmptyImage", "inputs": {"width": 64, "height": 64, "color": "#ff0000"}},
         "2": {"class_type": "SaveImage", "inputs": {"image": ["1", 0], "filename_prefix": "test"}},
@@ -20,10 +19,10 @@ def test_execute_prompt_runs_save_image():
     outputs = execute_prompt(prompt)
     assert "2" in outputs
     filename = outputs["2"]["images"][0]
-    assert (OUTPUT_DIR / filename).exists()
+    assert (output_dir / filename).exists()
 
 
-def test_execute_prompt_runs_a_real_diffusion_pipeline():
+def test_execute_prompt_runs_a_real_diffusion_pipeline(output_dir):
     prompt = {
         "ckpt": {"class_type": "LoadCheckpoint", "inputs": {"ckpt_name": TINY_SD_CHECKPOINT}},
         "clip": {"class_type": "CLIPTextEncode", "inputs": {"text": "a red circle"}},
@@ -46,7 +45,7 @@ def test_execute_prompt_runs_a_real_diffusion_pipeline():
     except (HfHubHTTPError, RequestsConnectionError) as exc:
         pytest.skip(f"Hugging Face Hub unreachable: {exc}")
     filename = outputs["save"]["images"][0]
-    assert (OUTPUT_DIR / filename).exists()
+    assert (output_dir / filename).exists()
 
 
 def _run_or_skip(prompt):
@@ -59,7 +58,7 @@ def _run_or_skip(prompt):
         pytest.skip(f"Hugging Face Hub unreachable: {exc}")
 
 
-def test_ksampler_same_seed_is_reproducible():
+def test_ksampler_same_seed_is_reproducible(output_dir):
     """A given (non-random) seed must reproduce the same image, and the
     chosen `sampler` must actually be applied to the pipeline."""
 
@@ -89,7 +88,7 @@ def test_ksampler_same_seed_is_reproducible():
 
     def _pixels(outputs):
         filename = outputs["save"]["images"][0]
-        with Image.open(OUTPUT_DIR / filename) as img:
+        with Image.open(output_dir / filename) as img:
             return list(img.convert("RGB").getdata())
 
     pixels_a = _pixels(outputs_a)
@@ -100,7 +99,7 @@ def test_ksampler_same_seed_is_reproducible():
     assert pixels_a != pixels_c, "different seeds should (almost certainly) differ"
 
 
-def test_ksampler_negative_prompt_changes_output():
+def test_ksampler_negative_prompt_changes_output(output_dir):
     """Wiring a second CLIPTextEncode into KSampler's `negative` input must
     actually reach the pipeline (different negative prompt -> different
     image for the same seed)."""
@@ -133,7 +132,7 @@ def test_ksampler_negative_prompt_changes_output():
 
     def _pixels(outputs):
         filename = outputs["save"]["images"][0]
-        with Image.open(OUTPUT_DIR / filename) as img:
+        with Image.open(output_dir / filename) as img:
             return list(img.convert("RGB").getdata())
 
     assert _pixels(outputs_plain) != _pixels(outputs_negative), (
@@ -141,7 +140,7 @@ def test_ksampler_negative_prompt_changes_output():
     )
 
 
-def test_ksampler_batch_size_produces_multiple_images():
+def test_ksampler_batch_size_produces_multiple_images(output_dir):
     prompt = {
         "ckpt": {"class_type": "LoadCheckpoint", "inputs": {"ckpt_name": TINY_SD_CHECKPOINT}},
         "clip": {"class_type": "CLIPTextEncode", "inputs": {"text": "a red circle"}},
@@ -164,11 +163,11 @@ def test_ksampler_batch_size_produces_multiple_images():
     filenames = outputs["save"]["images"]
     assert len(filenames) == 3
     for filename in filenames:
-        assert (OUTPUT_DIR / filename).exists()
+        assert (output_dir / filename).exists()
     assert len(set(filenames)) == 3, "each batch image must get its own saved filename"
 
 
-def test_preview_image_and_save_image_still_accept_a_single_pil_image():
+def test_preview_image_and_save_image_still_accept_a_single_pil_image(output_dir):
     """Non-batch nodes (EmptyImage etc.) still hand SaveImage/PreviewImage a
     single PIL.Image directly rather than a list - this must keep working
     after adding batch (list-of-images) support for KSampler's output."""
@@ -179,7 +178,7 @@ def test_preview_image_and_save_image_still_accept_a_single_pil_image():
     outputs = execute_prompt(prompt)
     filenames = outputs["preview"]["images"]
     assert len(filenames) == 1
-    assert (OUTPUT_DIR / filenames[0]).exists()
+    assert (output_dir / filenames[0]).exists()
 
 
 def test_ksampler_reports_step_progress_via_on_progress_callback():
