@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 from pathlib import Path
@@ -6,12 +7,13 @@ from typing import Any, Dict
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .engine.queue import ConnectionManager, ExecutionQueue
 from .nodes import NODE_REGISTRY
-from .paths import FRONTEND_DIR, OUTPUT_DIR, PathTraversalError, UPLOAD_DIR, WORKFLOW_DIR, safe_path
+from .paths import FRONTEND_DIR, OUTPUT_DIR, PathTraversalError, UPLOAD_DIR, WORKFLOW_DIR, safe_path, sanitize_filename
 from .security import ALLOWED_HOSTS, LocalOriginMiddleware
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -116,14 +118,34 @@ async def delete_history_entry(prompt_id: str):
     return {"deleted": prompt_id}
 
 
+def _open_unique(stem: str, suffix: str):
+    """Create (exclusively) a new file in UPLOAD_DIR named stem+suffix, or
+    stem_1+suffix, stem_2+suffix, ... if taken, so an upload never silently
+    overwrites an earlier one. Returns (path, open binary file)."""
+    for attempt in range(10_000):
+        name = f"{stem}{suffix}" if attempt == 0 else f"{stem}_{attempt}{suffix}"
+        dest = safe_path(UPLOAD_DIR, name)
+        try:
+            return dest, open(dest, "xb")
+        except FileExistsError:
+            continue
+    raise HTTPException(409, "Too many uploads with this filename")
+
+
 @app.post("/api/upload")
 async def upload_image(file: UploadFile = File(...)):
     if file.content_type not in ALLOWED_UPLOAD_CONTENT_TYPES:
         raise HTTPException(400, f"Unsupported content type '{file.content_type}'")
-    try:
-        dest = safe_path(UPLOAD_DIR, Path(file.filename).name)
-    except PathTraversalError:
-        raise HTTPException(400, "Invalid filename")
+    raw_name = Path(file.filename or "").name.strip()
+    if not raw_name:
+        raise HTTPException(400, "Missing filename")
+    # Sanitize stem and extension separately so a long name can't truncate
+    # the extension away, and characters like ':' can't create an NTFS
+    # alternate data stream.
+    raw_path = Path(raw_name)
+    stem = sanitize_filename(raw_path.stem, default="upload")
+    suffix = sanitize_filename(raw_path.suffix, default="")
+    suffix = f".{suffix.lower()}" if suffix else ""
 
     total = 0
     chunks = []
@@ -132,9 +154,24 @@ async def upload_image(file: UploadFile = File(...)):
         if total > MAX_UPLOAD_BYTES:
             raise HTTPException(413, f"File exceeds max upload size of {MAX_UPLOAD_BYTES} bytes")
         chunks.append(chunk)
+    data = b"".join(chunks)
+    if not data:
+        raise HTTPException(400, "Empty file")
 
-    with open(dest, "wb") as f:
-        f.writelines(chunks)
+    # The content-type header is client-controlled; make sure the bytes
+    # really are an image Pillow can decode before storing them.
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            img.verify()
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+        raise HTTPException(400, "File is not a valid image") from None
+
+    try:
+        dest, handle = _open_unique(stem, suffix)
+    except PathTraversalError:
+        raise HTTPException(400, "Invalid filename") from None
+    with handle:
+        handle.write(data)
     return {"filename": dest.name}
 
 

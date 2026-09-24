@@ -8,7 +8,7 @@ from diffusers import StableDiffusionPipeline
 from PIL import Image, ImageColor
 
 from .base import NodeBase, register_node
-from ..paths import CHECKPOINT_DIR, OUTPUT_DIR, PathTraversalError, UPLOAD_DIR, safe_path
+from ..paths import CHECKPOINT_DIR, OUTPUT_DIR, PathTraversalError, UPLOAD_DIR, safe_path, sanitize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -125,8 +125,7 @@ class LoadImage(NodeBase):
 
 def _save(image, prefix, folder):
     folder.mkdir(exist_ok=True)
-    safe_prefix = Path(prefix).name or "image"
-    name = f"{safe_prefix}_{uuid.uuid4().hex[:8]}.png"
+    name = f"{sanitize_filename(prefix)}_{uuid.uuid4().hex[:8]}.png"
     path = safe_path(folder, name)
     image.save(path)
     return path.name
