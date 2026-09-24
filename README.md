@@ -39,7 +39,7 @@ build first (see https://pytorch.org/get-started/locally/ for the right
 python run.py
 ```
 
-Then open http://127.0.0.1:8188 — click **Load Example** for a starter
+Then open http://127.0.0.1:8288 — click **Load Example** for a starter
 checkpoint → prompt → sampler → save graph, then **Queue Prompt**.
 
 ## Desktop App

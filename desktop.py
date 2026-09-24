@@ -12,8 +12,14 @@ import uvicorn
 import webview
 
 HOST = "127.0.0.1"
-PORT = 8188
+# Not 8188: that's ComfyUI's default port, and people who run PixelFlow are
+# likely to have ComfyUI running too. Keep in sync with run.py.
+PORT = 8288
 URL = f"http://{HOST}:{PORT}"
+HEALTH_URL = f"{URL}/api/health"
+# What backend/main.py's /api/health reports as "app" -- anything else
+# answering on PORT is some other program.
+APP_ID = "pixelflow"
 
 
 def _project_root() -> Path:
@@ -66,8 +72,11 @@ def _run_server() -> None:
         # uvicorn only installs OS signal handlers on the main thread, so running its
         # server loop here (a background thread) is safe alongside pywebview's own loop.
         server.run()
-    except BaseException:
+    except BaseException as exc:
         detail = traceback.format_exc()
+        if isinstance(exc, SystemExit):
+            # uvicorn logs a failed bind and calls sys.exit(1) -- by far the most common cause.
+            detail = f"uvicorn exited (code {exc.code}); port {PORT} is most likely already in use.\n\n{detail}"
         _server_error.append(detail)
         try:
             _server_log_path().write_text(detail, encoding="utf-8")
@@ -85,11 +94,27 @@ def _wait_for_server(thread: threading.Thread, timeout_s: float = 120.0) -> None
             reason = _server_error[-1] if _server_error else "the server thread exited unexpectedly"
             raise RuntimeError(f"The embedded PixelFlow server failed to start (see {_server_log_path()}):\n{reason}")
         try:
-            if requests.get(URL, timeout=0.5).ok:
-                return
+            response = requests.get(HEALTH_URL, timeout=0.5)
         except requests.RequestException:
             time.sleep(0.25)
+            continue
+        if _is_pixelflow_health(response):
+            return
+        # Something answered, but it isn't PixelFlow's health endpoint -- another app owns the
+        # port (our own uvicorn will fail to bind and the thread will die shortly). Keep polling
+        # until then so the thread-death branch above reports the real bind error.
+        time.sleep(0.25)
     raise RuntimeError(f"The embedded PixelFlow server did not start within {timeout_s:.0f}s")
+
+
+def _is_pixelflow_health(response: requests.Response) -> bool:
+    if not response.ok:
+        return False
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and payload.get("app") == APP_ID
 
 
 def main() -> None:

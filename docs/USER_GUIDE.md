@@ -16,7 +16,7 @@ have one, CPU otherwise (slower, but it works).
 
 ## Starting the app
 
-- **Dev web app**: `python run.py`, then open http://127.0.0.1:8188 in a
+- **Dev web app**: `python run.py`, then open http://127.0.0.1:8288 in a
   browser.
 - **Desktop app**: double-click `release\PixelFlow.exe` (or run
   `python desktop.py` from source) — same app, opened in its own window

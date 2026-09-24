@@ -15,7 +15,7 @@ window (`python desktop.py`, or the packaged `PixelFlow.exe`).
 
 | Command | What it does |
 |---|---|
-| `python run.py` | Runs the FastAPI/uvicorn server with `--reload` at http://127.0.0.1:8188, opened in a normal browser tab. Use this while developing. |
+| `python run.py` | Runs the FastAPI/uvicorn server with `--reload` at http://127.0.0.1:8288, opened in a normal browser tab. Use this while developing. |
 | `python desktop.py` | Runs the same server in a background thread and opens it in a native window via pywebview (no `--reload`; used for the packaged app). |
 | `release\PixelFlow.exe` | The packaged desktop app — same as `desktop.py`, but frozen with PyInstaller and bundling its own WebView2 Runtime. Built by `scripts\build_release.ps1`. |
 

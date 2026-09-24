@@ -17,6 +17,10 @@ from .security import ALLOWED_HOSTS, LocalOriginMiddleware
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+# Returned by /api/health so desktop.py can tell this server apart from some
+# other app (e.g. ComfyUI) already listening on the same port.
+APP_ID = "pixelflow"
+
 app = FastAPI(title="PixelFlow")
 # See backend/security.py. add_middleware() wraps outermost-last, so the
 # Host check runs first, then the Origin check.
@@ -71,6 +75,11 @@ def _node_info() -> dict:
             "output_node": bool(getattr(cls, "OUTPUT_NODE", False)),
         }
     return info
+
+
+@app.get("/api/health")
+async def health():
+    return {"app": APP_ID, "status": "ok"}
 
 
 @app.get("/api/nodes")
