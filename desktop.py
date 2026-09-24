@@ -4,6 +4,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 import requests
@@ -44,30 +45,57 @@ def _configure_webview2_runtime() -> None:
         os.environ["WEBVIEW2_BROWSER_EXECUTABLE_FOLDER"] = str(runtime_folder)
 
 
+def _server_log_path() -> Path:
+    base = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else _project_root()
+    return base / "server-error.log"
+
+
+_server_error: list[str] = []
+
+
 def _run_server() -> None:
-    from backend.main import app
+    # A windowed (console=False) build has no stderr, so an exception on this background thread --
+    # e.g. an import failing inside the frozen bundle -- used to vanish without a trace: the main
+    # thread just timed out with "server did not start". Keep the traceback, and write it next to
+    # the .exe so it can actually be diagnosed.
+    try:
+        from backend.main import app
 
-    config = uvicorn.Config(app, host=HOST, port=PORT, log_level="warning")
-    server = uvicorn.Server(config)
-    # uvicorn only installs OS signal handlers on the main thread, so running its
-    # server loop here (a background thread) is safe alongside pywebview's own loop.
-    server.run()
+        config = uvicorn.Config(app, host=HOST, port=PORT, log_level="warning")
+        server = uvicorn.Server(config)
+        # uvicorn only installs OS signal handlers on the main thread, so running its
+        # server loop here (a background thread) is safe alongside pywebview's own loop.
+        server.run()
+    except BaseException:
+        detail = traceback.format_exc()
+        _server_error.append(detail)
+        try:
+            _server_log_path().write_text(detail, encoding="utf-8")
+        except OSError:
+            pass
+        raise
 
 
-def _wait_for_server() -> None:
-    for _ in range(120):
+def _wait_for_server(thread: threading.Thread, timeout_s: float = 120.0) -> None:
+    # Loading the CUDA build of torch + diffusers cold can take well over 30s on first launch, so
+    # the budget is generous -- but stop immediately if the server thread has already died.
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if not thread.is_alive():
+            reason = _server_error[-1] if _server_error else "the server thread exited unexpectedly"
+            raise RuntimeError(f"The embedded PixelFlow server failed to start (see {_server_log_path()}):\n{reason}")
         try:
             if requests.get(URL, timeout=0.5).ok:
                 return
         except requests.RequestException:
             time.sleep(0.25)
-    raise RuntimeError("The embedded PixelFlow server did not start")
+    raise RuntimeError(f"The embedded PixelFlow server did not start within {timeout_s:.0f}s")
 
 
 def main() -> None:
     thread = threading.Thread(target=_run_server, daemon=True)
     thread.start()
-    _wait_for_server()
+    _wait_for_server(thread)
 
     _configure_webview2_runtime()
     webview.create_window("PixelFlow", URL, width=1440, height=960, min_size=(1024, 700))
