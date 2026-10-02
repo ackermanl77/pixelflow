@@ -18,6 +18,8 @@ def test_big_archives_are_split_below_githubs_asset_limit():
     assert '"-v$volumeSize"' in BUILD
     assert "PixelFlow-*-Windows.7z*" in RELEASE
     assert "Get-ChildItem -Path \"PixelFlow-*-Windows.7z*\"" in RELEASE, "pwsh doesn't glob for gh"
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "PixelFlow-*-Windows.7z.[0-9][0-9][0-9]" in gitignore, "split volumes must not show up in git status"
 
 
 def test_lock_file_pins_the_tested_versions_and_the_build_uses_it():
@@ -27,6 +29,8 @@ def test_lock_file_pins_the_tested_versions_and_the_build_uses_it():
         assert name in pins, name
     assert "+" not in pins["torch"], "the CUDA flavour comes from the index URL, not the pin"
     assert '@("-c", "requirements-lock.txt")' in BUILD
+    # Constrained too, or a newer torch on the CUDA index is swapped for PyPI's CPU-only locked one.
+    assert "--index-url $TorchIndexUrl @constraints" in BUILD
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert re.search(r"^diffusers>=[\d.]+,<[\d.]+$", requirements, re.MULTILINE), "diffusers needs an upper bound"
     assert re.search(r"^torch>=2\.7$", requirements, re.MULTILINE), "sm_120 needs torch 2.7+"
@@ -44,8 +48,10 @@ def test_spec_collects_webview_and_drops_torch_build_files():
 def test_version_is_stamped_and_signing_is_checked():
     assert "backend\\_version.py" in BUILD and "__version__" in BUILD
     assert "$CertificateThumbprint" in BUILD and "$CertificateSubject" not in BUILD
-    sign = BUILD.index("& signtool sign")
+    sign = BUILD.index("& $SignTool sign")
     assert "$LASTEXITCODE" in BUILD[sign : sign + 400], "a failed signature must stop the build"
+    required = BUILD.index("-CertificateThumbprint is required when -Sign is used.")
+    assert required < BUILD.index("-m PyInstaller"), "a missing thumbprint must fail before the build"
     assert "SIGNING_CERT_PFX" in RELEASE
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert "/backend/_version.py" in gitignore

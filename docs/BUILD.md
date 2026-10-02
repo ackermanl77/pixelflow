@@ -19,11 +19,21 @@ This doc covers building #3.
 > *weights* are not bundled — they're downloaded to `models/checkpoints/`
 > (local files) or the Hugging Face Hub cache on first use, not packaged into
 > the archive. `PixelFlow.spec` collects `torch`/`diffusers`/`transformers`/
-> `accelerate`/`safetensors` via `collect_all`, but this hasn't been
-> verified against a full `scripts/build_release.ps1` run — do a real build
-> and smoke-test the generation nodes in the packaged `.exe` before shipping
-> a release, since PyInstaller-freezing ML libraries with dynamic imports can
-> surface missing-hidden-import errors that only show up at runtime.
+> `accelerate`/`safetensors` via `collect_all`. A full
+> `scripts/build_release.ps1` run was verified on 2026-10-01 (Python 3.14.7,
+> `torch 2.14.1+cu130`, RTX 5080): about 5.5 minutes with cached wheels,
+> `release\` 3.89 GB in 7,366 files (`_internal` 3.11 GB, of which
+> `torch\lib` is 2.87 GB; `WebView2Runtime` 0.70 GB), and a 1.94 GB `.7z`
+> (1,944,501,485 bytes, only ~48 MB under the 1900 MB split threshold; the
+> split path was checked separately with a smaller `-MaxAssetBytes`). The
+> packaged app started, answered `/api/health`, listed all nodes and reported
+> `device cuda` (RTX 5080) in `/api/system`. Actually *running* the generation
+> nodes with a real model in the packaged `.exe` hasn't been done yet — do
+> that before shipping a release, since PyInstaller-freezing ML libraries with
+> dynamic imports can surface missing-hidden-import errors that only show up
+> at runtime. (PyInstaller logs many `Hidden import
+> 'torch.distributed._shard.checkpoint.…' not found` ERROR lines: those are
+> torch's deprecated alias modules and don't affect the build.)
 
 ## One-time setup
 
@@ -37,7 +47,7 @@ python -m venv .venv
 wheel is CPU-only, and once *any* torch satisfies `requirements.txt`'s
 `torch>=2.7`, pip won't replace it. PyInstaller bundles whatever torch the
 building interpreter has, so a CPU torch means a CPU-only app. The pinned
-index is **cu130** (what the last shipped build used, `torch 2.14.0+cu130`;
+index is **cu130** (what the last verified build used, `torch 2.14.1+cu130`;
 needs an NVIDIA driver 580 or newer). **cu128** also works (driver 570+);
 anything older than CUDA 12.8 has no kernels for RTX 50-series (sm_120)
 GPUs, and the build script refuses it.
@@ -115,11 +125,18 @@ This mirrors the sibling `photo_professional_tool` project's
 `build_release.ps1` exactly in approach:
 
 1. Picks the interpreter: `-Python <path>`, else `.venv\Scripts\python.exe`,
-   else `python` on `PATH` (no machine-specific paths).
+   else `python` on `PATH` (no machine-specific paths). The next step
+   `pip install`s into that interpreter, so by default it changes your dev
+   `.venv` to match `requirements-lock.txt`. To keep `.venv` untouched,
+   build from a separate venv:
+   `python -m venv build-venv; .\scripts\build_release.ps1 -Version "x" -Python build-venv\Scripts\python.exe`
+   (that's how the 2026-10-01 verification build was made).
 2. Installs torch from `-TorchIndexUrl` (default
    `https://download.pytorch.org/whl/cu130`; pip keeps an already-installed
-   torch), then `requirements.txt` + `requirements-desktop.txt`, constrained
-   by `requirements-lock.txt`.
+   torch), then `requirements.txt` + `requirements-desktop.txt`, all
+   constrained by `requirements-lock.txt` (the torch step too, so a newer
+   torch on the index can't later be swapped for PyPI's CPU-only locked
+   version).
 3. **CUDA guard:** prints `torch.__version__`/`torch.version.cuda` and stops
    before PyInstaller if torch is a CPU-only build or older than CUDA 12.8.
    `-AllowCpu` turns that into a warning (for a deliberate CPU build). It
@@ -138,11 +155,17 @@ This mirrors the sibling `photo_professional_tool` project's
    `release\build-info.json` (version, git SHA, build time, Python, torch,
    torch CUDA, diffusers, transformers) so a shipped build can be identified.
 7. Optionally code-signs the exe (`-Sign -CertificateThumbprint <sha1>`); a
-   failing `signtool` stops the build.
+   failing `signtool` stops the build. Without `-Sign` this step is skipped
+   silently. With `-Sign`, a missing thumbprint or a missing `signtool` (looked
+   up on `PATH`, then in the newest `Windows Kits\10\bin\10.*\x64`) fails at
+   the start instead of after the build.
 8. Compresses `release\` to `PixelFlow-<version>-Windows.7z` + `.sha256` if
-   `7z` is on `PATH` (otherwise just warns), split into volumes when it's
-   over `-MaxAssetBytes`. `-SkipArchive` skips this and removes a stale
-   archive from an earlier build.
+   7-Zip is found (`7z` on `PATH` or `%ProgramFiles%\7-Zip\7z.exe`;
+   otherwise just warns), split into volumes when it's over
+   `-MaxAssetBytes` (pass a plain byte count, e.g. `-MaxAssetBytes
+   1048576000`, when calling through `powershell -File`: `1000MB` is only
+   understood inside PowerShell). `-SkipArchive` skips this and removes a
+   stale archive from an earlier build.
 9. Deletes `build-release\` and `dist-release\` after a successful build
    (`-KeepBuildFiles` keeps PyInstaller's cache for a faster rebuild; a failed
    build always keeps them for debugging).
@@ -189,6 +212,10 @@ between runs:
   `PIXELFLOW_HOME` overrides both, and `PIXELFLOW_MODELS_DIR` /
   `settings.json`'s `models_dir` move the models. See
   [PROJECT_STATUS.md](PROJECT_STATUS.md#where-data-lives-backendpathspy).
+  Checked against the packaged 2026-10-01 build (via `/api/system`'s
+  `data_dir`/`models_dir`): `%LOCALAPPDATA%\PixelFlow` by default, the exe's
+  folder with `portable.txt` or an existing `outputs` folder there, and
+  `PIXELFLOW_HOME`/`PIXELFLOW_MODELS_DIR` take precedence.
 
 ## GPU checks before a release
 

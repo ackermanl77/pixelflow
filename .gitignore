@@ -15,6 +15,8 @@ uploads/*
 
 # Build & release output
 build-release/
+# A separate venv to build releases from without touching .venv (docs/BUILD.md).
+/build-venv/
 dist-release/
 dist/
 build/
@@ -22,6 +24,8 @@ PixelFlow-*-Windows/
 PixelFlow-*-Windows.zip
 PixelFlow-*-Windows.7z
 PixelFlow-*-Windows.7z.sha256
+# Split volumes (.7z.001, .002, ...) of an archive over -MaxAssetBytes (scripts/build_release.ps1).
+PixelFlow-*-Windows.7z.[0-9][0-9][0-9]
 # Fixed-name mirror of the current PixelFlow-<version>-Windows/ build output (see
 # scripts/build_release.ps1) -- always the latest build, so PixelFlow.exe has one stable place.
 /release/

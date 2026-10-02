@@ -84,8 +84,39 @@ function Invoke-PythonSnippet([string]$Code, [string[]]$Arguments = @()) {
     }
 }
 
+# Remove-Item -Recurse in a OneDrive-synced folder intermittently fails with "Access denied" while
+# OneDrive is still processing the deletions (seen on the first full release build): retry a few
+# times before giving up.
+function Remove-Tree([string]$Path) {
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        if (-not (Test-Path $Path)) { return }
+        try {
+            Remove-Item $Path -Recurse -Force -ErrorAction Stop
+            return
+        } catch {
+            if ($attempt -eq 5) { throw }
+            Write-Warning "Removing $Path failed (attempt $attempt of 5): $($_.Exception.Message) Retrying..."
+            Start-Sleep -Seconds 3
+        }
+    }
+}
+
 if (-not (Test-Path $Python)) {
     throw "Python interpreter not found. Create .venv, put python on PATH, or pass -Python."
+}
+# Check the signing setup before the multi-minute build, not after it.
+if ($Sign) {
+    if ([string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+        throw "-CertificateThumbprint is required when -Sign is used."
+    }
+    # signtool ships with the Windows SDK, which doesn't put it on PATH (GitHub's windows-latest
+    # runners included): fall back to the newest SDK's x64 copy.
+    $SignTool = Get-Command signtool -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+    if (-not $SignTool -and ${env:ProgramFiles(x86)}) {
+        $SignTool = Get-ChildItem (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin\10.*\x64\signtool.exe") -ErrorAction SilentlyContinue |
+            Sort-Object { [version]$_.Directory.Parent.Name } | Select-Object -Last 1 -ExpandProperty FullName
+    }
+    if (-not $SignTool) { throw "-Sign needs signtool.exe (Windows SDK); it is neither on PATH nor in Windows Kits\10\bin." }
 }
 
 Push-Location $ProjectRoot
@@ -93,16 +124,18 @@ try {
     # $ErrorActionPreference doesn't cover native commands -- check their exit codes explicitly, so a
     # failed install or build stops here instead of packaging (and cleaning up around) a stale output.
     Write-Host "Building with $Python"
-    if ($TorchIndexUrl) {
-        # Must come before requirements.txt: once any torch satisfies "torch>=2.4", pip won't
-        # replace it, and on Windows the PyPI wheel it would otherwise pick is CPU-only.
-        & $Python -m pip install torch --index-url $TorchIndexUrl
-        if ($LASTEXITCODE -ne 0) { throw "pip install torch --index-url $TorchIndexUrl failed (exit code $LASTEXITCODE)." }
-    }
     # requirements-lock.txt pins the exact versions the app was tested with (scripts/make_lock.py);
     # as a constraints file it only fixes versions, it never adds packages.
     $constraints = @()
     if (Test-Path (Join-Path $ProjectRoot "requirements-lock.txt")) { $constraints = @("-c", "requirements-lock.txt") }
+    if ($TorchIndexUrl) {
+        # Must come before requirements.txt: once any torch satisfies "torch>=2.7", pip won't
+        # replace it, and on Windows the PyPI wheel it would otherwise pick is CPU-only. Constrained
+        # too: an unpinned newer torch from the index would otherwise be swapped for the locked
+        # version from PyPI (CPU-only) by the requirements.txt step below.
+        & $Python -m pip install torch --index-url $TorchIndexUrl @constraints
+        if ($LASTEXITCODE -ne 0) { throw "pip install torch --index-url $TorchIndexUrl failed (exit code $LASTEXITCODE)." }
+    }
     & $Python -m pip install -r requirements.txt @constraints
     if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements.txt failed (exit code $LASTEXITCODE)." }
     & $Python -m pip install -r requirements-desktop.txt @constraints
@@ -145,7 +178,7 @@ sys.exit(0 if (major, minor) >= (12, 8) else 4)
 
     # Move (not copy) PyInstaller's output into release\: on the same drive that's a rename, so the
     # multi-GB build is never duplicated on disk, not even briefly.
-    if (Test-Path $ReleaseFolder) { Remove-Item $ReleaseFolder -Recurse -Force }
+    Remove-Tree $ReleaseFolder
     $oneFolder = Join-Path $Dist "PixelFlow"
     $oneFile = Join-Path $Dist "PixelFlow.exe"
     if (Test-Path $oneFolder) {
@@ -199,16 +232,17 @@ json.dump({
     Get-Content (Join-Path $ReleaseFolder "build-info.json") | Write-Host
 
     if ($Sign) {
-        if ([string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
-            throw "-CertificateThumbprint is required when -Sign is used."
-        }
         $exe = Join-Path $ReleaseFolder "PixelFlow.exe"
-        & signtool sign /sha1 $CertificateThumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $exe
+        & $SignTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $exe
         if ($LASTEXITCODE -ne 0) { throw "signtool failed (exit code $LASTEXITCODE) -- the release is not signed." }
     }
 
     $hashPath = "$Archive.sha256"
     $sevenZip = Get-Command 7z -ErrorAction SilentlyContinue
+    if (-not $sevenZip -and $env:ProgramFiles) {
+        # The 7-Zip installer doesn't add itself to PATH -- use its default install location too.
+        $sevenZip = Get-Command (Join-Path $env:ProgramFiles "7-Zip\7z.exe") -ErrorAction SilentlyContinue
+    }
     if ($SkipArchive) {
         # An archive left over from an earlier build no longer matches release\ -- remove it rather
         # than leave a stale copy that looks like this build's.
@@ -244,7 +278,7 @@ json.dump({
     $leftovers = @($LegacyPackage)
     if (-not $KeepBuildFiles) { $leftovers += @($Build, $Dist) }
     foreach ($leftover in $leftovers) {
-        if (Test-Path $leftover) { Remove-Item $leftover -Recurse -Force; Write-Host "Cleaned up $leftover" }
+        if (Test-Path $leftover) { Remove-Tree $leftover; Write-Host "Cleaned up $leftover" }
     }
 } finally {
     Pop-Location
