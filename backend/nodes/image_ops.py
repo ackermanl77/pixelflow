@@ -1,4 +1,4 @@
-from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from .base import NodeBase, map_image_pairs, map_images, register_node
 
@@ -149,9 +149,19 @@ class ImageTextOverlay(NodeBase):
                 "x": ("INT", {"default": 10, "min": 0, "max": 4096}),
                 "y": ("INT", {"default": 10, "min": 0, "max": 4096}),
                 "size": ("INT", {"default": 32, "min": 6, "max": 300}),
-                "color": ("STRING", {"default": "#ffffff"}),
+                "color": ("STRING", {"default": "#ffffff", "tooltip": "Any CSS-style colour"}),
             }
         }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, color=None, **_):
+        if color is None:
+            return True
+        try:
+            ImageColor.getrgb(color)
+        except (ValueError, AttributeError):
+            return f"'{color}' is not a colour (use e.g. #ffffff, rgb(255,255,255) or a name like 'white')"
+        return True
 
     def run(self, image, text, x, y, size, color):
         try:

@@ -5,6 +5,17 @@ logger = logging.getLogger(__name__)
 
 NODE_REGISTRY: Dict[str, Type["NodeBase"]] = {}
 
+# Old class names -> current ones, so a node class can be renamed without
+# breaking saved workflows, queued prompts or the prompts embedded in PNGs.
+NODE_ALIASES: Dict[str, str] = {"KSamplerStub": "KSampler"}
+
+
+def resolve_class_type(class_type):
+    """The registered class name for `class_type`, following NODE_ALIASES."""
+    if class_type in NODE_REGISTRY:
+        return class_type
+    return NODE_ALIASES.get(class_type, class_type)
+
 
 class NodeBase:
     """Base class for a node. Mirrors ComfyUI's node contract:
@@ -18,6 +29,25 @@ class NodeBase:
     FUNCTION: str = "execute"
     OUTPUT_NODE: bool = False
     DISPLAY_NAME: str = ""
+    # One line shown in the node palette / as the node's tooltip.
+    DESCRIPTION: str = ""
+    # Whether the engine may keep this node's outputs between runs and reuse
+    # them while its inputs are unchanged (engine.graph.OutputCache). Turn it
+    # off for outputs that hold large resources with their own lifetime
+    # management (LoadCheckpoint's pipelines live in their own LRU).
+    CACHE_OUTPUTS: bool = True
+    # Optional: a classmethod IS_CHANGED(cls, **widget_values) whose return
+    # value is folded into the node's cache signature. Return something that
+    # changes when an external input changes (e.g. a file's mtime), or
+    # float("nan") to always re-run (e.g. a random seed). Only literal
+    # (widget) inputs are passed, not linked ones.
+    #
+    # Optional: a classmethod VALIDATE_INPUTS(cls, **widget_values) returning
+    # True, or an error message (str), called by validate_prompt() after the
+    # structural checks - so e.g. a bad colour or a missing upload is a 400
+    # before the prompt is queued instead of an error halfway through a run.
+    # Only literal (widget) inputs are passed. Per-input tooltips go into the
+    # INPUT_TYPES config dict as "tooltip".
 
     @classmethod
     def INPUT_TYPES(cls) -> Dict[str, Any]:

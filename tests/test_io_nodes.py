@@ -3,12 +3,12 @@ import json
 import pytest
 import torch
 from diffusers import EulerDiscreteScheduler
-from huggingface_hub.errors import HfHubHTTPError
 from PIL import Image
-from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from backend.engine.graph import execute_prompt
 from backend.nodes import generation, io_nodes
+
+from _hub import skip_if_hub_unreachable
 
 TINY_SD_CHECKPOINT = "hf-internal-testing/tiny-stable-diffusion-torch"
 
@@ -39,49 +39,7 @@ def test_save_image_sanitizes_the_filename_prefix(output_dir, prefix, expected_s
 # ---- pipeline LRU cache ----
 
 
-class _FakePipeline:
-    instances = []
-
-    def __init__(self, name):
-        self.name = name
-        _FakePipeline.instances.append(self)
-
-    @classmethod
-    def from_pretrained(cls, name, torch_dtype=None):
-        return cls(name)
-
-    def to(self, device):
-        return self
-
-    def set_progress_bar_config(self, **kwargs):
-        pass
-
-
-@pytest.fixture
-def fake_pipelines(monkeypatch):
-    monkeypatch.setattr(io_nodes, "StableDiffusionPipeline", _FakePipeline)
-    monkeypatch.setattr(io_nodes, "_pipeline_cache", io_nodes.OrderedDict())
-    freed = []
-    monkeypatch.setattr(io_nodes, "free_memory", lambda: freed.append(True))
-    return freed
-
-
-def test_pipeline_cache_evicts_the_least_recently_used(fake_pipelines, monkeypatch):
-    monkeypatch.setattr(io_nodes, "MAX_CACHED_PIPELINES", 2)
-    a = io_nodes._load_pipeline("repo/a")
-    b = io_nodes._load_pipeline("repo/b")
-    assert io_nodes._load_pipeline("repo/a") is a  # cache hit, and now most recent
-    io_nodes._load_pipeline("repo/c")  # evicts b, not a
-    names = [key[0] for key in io_nodes._pipeline_cache]
-    assert names == ["repo/a", "repo/c"]
-    assert fake_pipelines, "evicting must free (V)RAM"
-    assert io_nodes._load_pipeline("repo/b") is not b  # reloaded
-
-
-def test_default_cache_keeps_only_one_pipeline(fake_pipelines):
-    io_nodes._load_pipeline("repo/a")
-    io_nodes._load_pipeline("repo/b")
-    assert [key[0] for key in io_nodes._pipeline_cache] == ["repo/b"]
+# (The pipeline cache itself is covered in tests/test_models.py.)
 
 
 # ---- out-of-memory handling ----
@@ -137,8 +95,9 @@ def test_random_seed_is_reported_and_embedded_in_png_metadata(output_dir):
     workflow = {"nodes": [{"id": 1}], "links": []}
     try:
         outputs = execute_prompt(prompt, extra_pnginfo={"workflow": workflow})
-    except (HfHubHTTPError, RequestsConnectionError) as exc:
-        pytest.skip(f"Hugging Face Hub unreachable: {exc}")
+    except Exception as exc:
+        skip_if_hub_unreachable(exc)
+        raise
 
     seed = outputs["sampler"]["seed"]
     assert isinstance(seed, int) and seed >= 0
@@ -159,12 +118,12 @@ def test_random_seed_is_reported_and_embedded_in_png_metadata(output_dir):
         assert list(a.convert("RGB").getdata()) == list(b.convert("RGB").getdata())
 
 
-def test_save_without_a_sampler_still_embeds_the_prompt(output_dir):
+def test_save_without_a_sampler_still_embeds_the_prompt(temp_dir):
     prompt = {
         "1": {"class_type": "EmptyImage", "inputs": {"width": 8, "height": 8, "color": "#000000"}},
         "2": {"class_type": "PreviewImage", "inputs": {"image": ["1", 0]}},
     }
     outputs = execute_prompt(prompt)
-    with Image.open(output_dir / outputs["2"]["images"][0]) as img:
+    with Image.open(temp_dir / outputs["2"]["images"][0]) as img:
         assert json.loads(img.text["prompt"]) == prompt
         assert "workflow" not in img.text

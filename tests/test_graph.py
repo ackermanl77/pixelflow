@@ -1,9 +1,9 @@
 import pytest
-from huggingface_hub.errors import HfHubHTTPError
 from PIL import Image
-from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from backend.engine.graph import GraphError, execute_prompt
+
+from _hub import skip_if_hub_unreachable
 
 # A real, randomly-initialized-weights Stable Diffusion pipeline published by
 # the diffusers team specifically for exercising the real pipeline code path
@@ -42,8 +42,9 @@ def test_execute_prompt_runs_a_real_diffusion_pipeline(output_dir):
     }
     try:
         outputs = execute_prompt(prompt)
-    except (HfHubHTTPError, RequestsConnectionError) as exc:
-        pytest.skip(f"Hugging Face Hub unreachable: {exc}")
+    except Exception as exc:
+        skip_if_hub_unreachable(exc)
+        raise
     filename = outputs["save"]["images"][0]
     assert (output_dir / filename).exists()
 
@@ -54,8 +55,9 @@ def _run_or_skip(prompt):
     fallback test_execute_prompt_runs_a_real_diffusion_pipeline uses."""
     try:
         return execute_prompt(prompt)
-    except (HfHubHTTPError, RequestsConnectionError) as exc:
-        pytest.skip(f"Hugging Face Hub unreachable: {exc}")
+    except Exception as exc:
+        skip_if_hub_unreachable(exc)
+        raise
 
 
 def test_ksampler_same_seed_is_reproducible(output_dir):
@@ -167,7 +169,7 @@ def test_ksampler_batch_size_produces_multiple_images(output_dir):
     assert len(set(filenames)) == 3, "each batch image must get its own saved filename"
 
 
-def test_preview_image_and_save_image_still_accept_a_single_pil_image(output_dir):
+def test_preview_image_and_save_image_still_accept_a_single_pil_image(temp_dir):
     """Non-batch nodes (EmptyImage etc.) still hand SaveImage/PreviewImage a
     single PIL.Image directly rather than a list - this must keep working
     after adding batch (list-of-images) support for KSampler's output."""
@@ -178,7 +180,8 @@ def test_preview_image_and_save_image_still_accept_a_single_pil_image(output_dir
     outputs = execute_prompt(prompt)
     filenames = outputs["preview"]["images"]
     assert len(filenames) == 1
-    assert (output_dir / filenames[0]).exists()
+    assert (temp_dir / filenames[0]).exists()
+    assert outputs["preview"]["type"] == "temp", "previews go to temp/, not outputs/ (B15)"
 
 
 def test_ksampler_reports_step_progress_via_on_progress_callback():
@@ -208,8 +211,9 @@ def test_ksampler_reports_step_progress_via_on_progress_callback():
 
     try:
         execute_prompt(prompt, on_progress=on_progress)
-    except (HfHubHTTPError, RequestsConnectionError) as exc:
-        pytest.skip(f"Hugging Face Hub unreachable: {exc}")
+    except Exception as exc:
+        skip_if_hub_unreachable(exc)
+        raise
 
     assert progress_calls, "expected at least one progress callback during sampling"
     assert all(node_id == "sampler" for node_id, _, _ in progress_calls)

@@ -1,80 +1,484 @@
+import inspect
+import logging
 import random
+import threading
+import time
+import weakref
 
-import torch
-from diffusers import (
-    DDIMScheduler,
-    DPMSolverMultistepScheduler,
-    EulerAncestralDiscreteScheduler,
-    EulerDiscreteScheduler,
-    HeunDiscreteScheduler,
-    LMSDiscreteScheduler,
-    PNDMScheduler,
-)
+from PIL import Image
 
-from .base import NodeBase, first_image, register_node
-from .io_nodes import OutOfMemoryError, free_memory
+from . import latent_preview, models, prompt_weights, runtime
+from .base import NodeBase, as_image_list, first_image, register_node
+from .io_nodes import MODEL_INFO_KEY, NODE_INFO_KEY, SEED_INFO_KEY
 
-# A reasonable subset of diffusers' interchangeable schedulers. Each is
-# swapped onto the cached pipeline via `SchedulerClass.from_config(pipe.scheduler.config)`
-# right before sampling, so the same cached pipeline instance can be reused
-# across KSampler nodes/runs that pick different samplers without reloading
-# the underlying model weights.
+logger = logging.getLogger(__name__)
+
+# Looked up (lazily, by class name) on diffusers at sample time, so this
+# module doesn't import diffusers at startup (report item P6).
 SCHEDULERS = {
-    "euler": EulerDiscreteScheduler,
-    "euler_ancestral": EulerAncestralDiscreteScheduler,
-    "dpm_multistep": DPMSolverMultistepScheduler,
-    "pndm": PNDMScheduler,
-    "ddim": DDIMScheduler,
-    "lms": LMSDiscreteScheduler,
-    "heun": HeunDiscreteScheduler,
+    "euler": "EulerDiscreteScheduler",
+    "euler_ancestral": "EulerAncestralDiscreteScheduler",
+    "dpm_multistep": "DPMSolverMultistepScheduler",
+    "pndm": "PNDMScheduler",
+    "ddim": "DDIMScheduler",
+    "lms": "LMSDiscreteScheduler",
+    "heun": "HeunDiscreteScheduler",
 }
 
+# Sigma / timestep schedules (report item B8): "karras" is the most used
+# A1111/Forge variant, "trailing" what SDXL-turbo-style models want.
+SCHEDULE_TYPES = ["normal", "karras", "trailing"]
+
 MAX_SEED = 2**31 - 1
+
+# Above this many output pixels the VAE decodes in tiles (bounded memory,
+# but tiling can leave faint seams, so smaller images decode in one piece).
+# A decode that still runs out of memory is retried once with tiling on.
+VAE_TILING_MIN_PIXELS = 1536 * 1536
+
+# How often a live latent preview is sent at most.
+PREVIEW_INTERVAL_S = 0.25
+
+
+def free_memory() -> None:
+    runtime.free_memory()
 
 
 @register_node("CLIP Text Encode")
 class CLIPTextEncode(NodeBase):
-    """Wraps the prompt text as CONDITIONING. There's no separate embedding
-    step here: KSampler passes this text straight to the loaded pipeline's
-    own `prompt=`/`negative_prompt=` arguments, which do their own
-    tokenization/CLIP-encoding internally. This node exists so the graph
-    keeps the familiar checkpoint -> conditioning -> sampler shape. The same
-    node class is used for both the positive and negative prompt - wire a
-    second instance into KSampler's optional `negative` input for a real
-    negative prompt, the same way ComfyUI itself wires two CLIPTextEncode
-    nodes into a KSampler.
-    """
+    """The prompt text as CONDITIONING. Weighting with (word:1.2), (word),
+    [word] is supported, and prompts longer than 77 CLIP tokens are encoded
+    in chunks instead of being cut off (SD 1.x/2.x checkpoints; other
+    architectures get the text with the weighting syntax removed). The
+    encoding itself happens in the sampler, where the model is known. Wire
+    a second instance into the sampler's `negative` input for a negative
+    prompt."""
 
     CATEGORY = "conditioning"
     RETURN_TYPES = ("CONDITIONING",)
     RETURN_NAMES = ("conditioning",)
     FUNCTION = "encode"
+    DESCRIPTION = "Prompt text; supports (word:1.2) weighting and long prompts."
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"text": ("STRING", {"default": "", "multiline": True})}}
+        return {
+            "required": {"text": ("STRING", {"default": "", "multiline": True})},
+            "optional": {
+                "clip_skip": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 12,
+                        "tooltip": "Skip the last N CLIP layers (1 = A1111/ComfyUI 'clip skip 2')",
+                    },
+                )
+            },
+        }
 
-    def encode(self, text):
-        return ({"text": text},)
+    def encode(self, text, clip_skip=0):
+        return ({"text": text, "clip_skip": int(clip_skip)},)
+
+
+# ---- LoRA (report item B6) ----
+
+
+@register_node("Load LoRA")
+class LoraLoader(NodeBase):
+    """Adds a LoRA from models/loras/ to the MODEL at `strength`. Chain
+    several for several LoRAs. Nothing is changed in the shared, cached
+    pipeline here: the sampler activates exactly this MODEL's LoRAs for its
+    run (and none for a MODEL without them). Needs the `peft` package."""
+
+    CATEGORY = "loaders"
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    FUNCTION = "apply"
+    DESCRIPTION = "Applies a LoRA (models/loras/*.safetensors) to a model."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "lora_name": (models.list_models("loras"), {"tooltip": "A .safetensors file in models/loras/"}),
+                "strength": ("FLOAT", {"default": 1.0, "min": -5.0, "max": 5.0, "step": 0.05}),
+            }
+        }
+
+    @classmethod
+    def IS_CHANGED(cls, lora_name="", **_):
+        path = models.local_model_path("loras", lora_name)
+        if path is not None and path.is_file():
+            stat = path.stat()
+            return f"{stat.st_mtime_ns}:{stat.st_size}"
+        return float("nan")
+
+    def apply(self, model, lora_name, strength=1.0):
+        path = models.local_model_path("loras", lora_name)
+        if path is None or not path.is_file():
+            raise FileNotFoundError(f"LoRA '{lora_name}' is not in models/loras/")
+        loras = list(model.get("loras", [])) + [(lora_name, float(strength))]
+        return ({**model, "loras": loras},)
+
+
+_lora_lock = threading.Lock()
+
+
+def _adapter_name(lora_name: str, path) -> str:
+    stat = path.stat()
+    safe = "".join(c if c.isalnum() else "_" for c in lora_name)
+    return f"{safe}_{stat.st_mtime_ns % 10**9}"
+
+
+def apply_loras(pipe, loras) -> None:
+    """Make exactly `loras` ([(name, strength)]) active on `pipe` for this
+    run: each LoRA file is loaded once per pipeline (as a named adapter)
+    and then just switched on/off with set_adapters()/disable_lora(), so the
+    cached pipeline never accumulates a previous run's LoRAs."""
+    loaded = getattr(pipe, "_pixelflow_loras", None)
+    if not loras:
+        if loaded:
+            pipe.disable_lora()
+        return
+    if not hasattr(pipe, "load_lora_weights"):
+        raise RuntimeError(f"{type(pipe).__name__} does not support LoRAs")
+    try:
+        import peft  # noqa: F401
+    except ImportError:
+        raise RuntimeError("LoRA support needs the 'peft' package: pip install peft") from None
+    with _lora_lock:
+        loaded = getattr(pipe, "_pixelflow_loras", None)
+        if loaded is None:
+            loaded = set()
+            setattr(pipe, "_pixelflow_loras", loaded)
+        names, weights = [], []
+        for lora_name, strength in loras:
+            path = models.local_model_path("loras", lora_name)
+            if path is None or not path.is_file():
+                raise FileNotFoundError(f"LoRA '{lora_name}' is not in models/loras/")
+            adapter = _adapter_name(lora_name, path)
+            if adapter not in loaded:
+                logger.info("loading LoRA %s", path)
+                pipe.load_lora_weights(str(path), adapter_name=adapter)
+                loaded.add(adapter)
+            if adapter in names:  # the same LoRA chained twice: strengths add up
+                weights[names.index(adapter)] += float(strength)
+            else:
+                names.append(adapter)
+                weights.append(float(strength))
+        pipe.enable_lora()
+        pipe.set_adapters(names, adapter_weights=weights)
+
+
+# ---- shared sampling machinery (KSampler, KSampler (Image), KSampler (Inpaint)) ----
+
+# img2img/inpainting pipelines derived from a loaded txt2img pipeline via
+# from_pipe(), which shares its components (UNet, VAE, text encoder) - no
+# extra weights are loaded. Keyed weakly by the base pipeline, so a derived
+# pipeline goes away together with its base when the pipeline cache drops it.
+_DERIVED_FACTORIES = {"img2img": "AutoPipelineForImage2Image", "inpaint": "AutoPipelineForInpainting"}
+_derived_pipelines: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_derived_lock = threading.Lock()
+
+
+def derived_pipeline(pipe, kind: str):
+    import diffusers
+
+    with _derived_lock:
+        per_pipe = _derived_pipelines.setdefault(pipe, {})
+        derived = per_pipe.get(kind)
+        if derived is None:
+            derived = getattr(diffusers, _DERIVED_FACTORIES[kind]).from_pipe(pipe)
+            derived.set_progress_bar_config(disable=True)
+            per_pipe[kind] = derived
+        return derived
+
+
+def _sampler_inputs(image_input=None):
+    """INPUT_TYPES shared by the three samplers; `image_input` adds the
+    source-image inputs of the img2img/inpaint variants."""
+    required = {
+        "model": ("MODEL",),
+        "positive": ("CONDITIONING",),
+    }
+    required.update(image_input or {"latent_image": ("IMAGE",)})
+    required.update(
+        {
+            "sampler": (list(SCHEDULERS.keys()), {"default": "euler"}),
+            "seed": (
+                "INT",
+                {
+                    "default": -1,
+                    "min": -1,
+                    "max": MAX_SEED,
+                    "control_after_generate": True,
+                    "tooltip": "-1 = random; image i of a batch uses seed + i",
+                },
+            ),
+            "steps": ("INT", {"default": 20, "min": 1, "max": 150}),
+            "cfg": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 30.0, "step": 0.1}),
+            "batch_size": ("INT", {"default": 1, "min": 1, "max": 8}),
+        }
+    )
+    return {
+        "required": required,
+        "optional": {
+            "negative": ("CONDITIONING",),
+            "scheduler": (list(SCHEDULE_TYPES), {"default": "normal", "tooltip": "Sigma schedule: normal, karras or trailing"}),
+        },
+        "hidden": {"unique_id": "UNIQUE_ID"},
+    }
+
+
+def _sampler_is_changed(seed=-1, **_):
+    # A random seed (-1, or a seed fed by a link) must re-sample every run;
+    # a fixed seed with unchanged inputs reproduces the same image, so the
+    # engine may reuse the previous result (engine.graph.OutputCache).
+    try:
+        return float("nan") if int(seed) < 0 else ""
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _set_vae_tiling(pipe, enabled: bool) -> None:
+    vae = getattr(pipe, "vae", None)
+    if vae is None:
+        return
+    if enabled and hasattr(vae, "enable_tiling"):
+        vae.enable_tiling()
+    elif not enabled and hasattr(vae, "disable_tiling"):
+        vae.disable_tiling()
+
+
+def _can_tile(pipe) -> bool:
+    return hasattr(getattr(pipe, "vae", None), "enable_tiling")
+
+
+def _snap8(size):
+    """SD pipelines need dimensions that are multiples of 8."""
+    width, height = size
+    return max(8, (width // 8) * 8), max(8, (height // 8) * 8)
+
+
+def make_scheduler(pipe, sampler: str, schedule: str = "normal", base_config=None):
+    """A fresh scheduler for this run, always derived from the checkpoint's
+    *own* scheduler config (kept when it was loaded), never from whatever a
+    previous run swapped in - so options like karras don't leak between
+    runs that share the cached pipeline."""
+    import diffusers
+
+    config = dict(base_config or getattr(pipe.scheduler, "config", {}) or {})
+    class_name = SCHEDULERS.get(sampler)
+    scheduler_cls = getattr(diffusers, class_name) if class_name else type(pipe.scheduler)
+    overrides = {}
+    if schedule == "karras":
+        overrides["use_karras_sigmas"] = True
+    elif schedule == "trailing":
+        overrides["timestep_spacing"] = "trailing"
+    if schedule != "normal":
+        accepted = set(inspect.signature(scheduler_cls.__init__).parameters)
+        dropped = [k for k in overrides if k not in accepted]
+        if dropped:
+            logger.info("%s has no %s option; using its normal schedule", scheduler_cls.__name__, schedule)
+        overrides = {k: v for k, v in overrides.items() if k in accepted}
+    # As kwargs, not merged into the dict: from_config() resets keys listed in
+    # the config's _use_default_values back to their defaults.
+    return scheduler_cls.from_config(config, **overrides)
+
+
+def _supported_kwargs(pipe, kwargs):
+    """Drop call arguments this pipeline class doesn't take (e.g. Flux has
+    no negative prompt in some versions), instead of failing."""
+    try:
+        params = inspect.signature(pipe.__call__).parameters
+    except (TypeError, ValueError):
+        return kwargs
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kwargs
+    unsupported = [k for k in kwargs if k not in params]
+    if unsupported:
+        logger.debug("%s does not take %s; dropped", type(pipe).__name__, unsupported)
+    return {k: v for k, v in kwargs.items() if k in params}
+
+
+def _texts(positive, negative):
+    return positive.get("text", ""), (negative.get("text", "") if negative else None)
+
+
+def _prompt_kwargs(model, pipe, positive, negative, repeat: int):
+    """`prompt`/`negative_prompt` (plain text), or `prompt_embeds`/
+    `negative_prompt_embeds` when weighting, long prompts or clip skip need
+    our own CLIP encoding (SD 1.x/2.x)."""
+    text, negative_text = _texts(positive, negative)
+    clip_skip = int(positive.get("clip_skip", 0) or 0)
+    arch = (model or {}).get("arch") or models.pipeline_meta(model.get("pipeline") if model else None).get("arch")
+    tokenizer = getattr(pipe, "tokenizer", None)
+    can_embed = (
+        arch in (None, models.ARCH_SD)
+        and tokenizer is not None
+        and getattr(pipe, "text_encoder", None) is not None
+        and getattr(pipe, "tokenizer_2", None) is None
+        and hasattr(tokenizer, "model_max_length")
+    )
+    # clip_skip goes through our own encoder too: diffusers' clip_skip path
+    # reaches for CLIPTextModel.text_model, which transformers 5 removed.
+    if can_embed and (
+        clip_skip > 0
+        or prompt_weights.needs_embeddings(tokenizer, text)
+        or (negative_text and prompt_weights.needs_embeddings(tokenizer, negative_text))
+    ):
+        prompt_embeds, negative_embeds = prompt_weights.encode_prompt_pair(pipe, text, negative_text or "", clip_skip)
+        return {
+            "prompt_embeds": prompt_embeds.repeat(repeat, 1, 1),
+            "negative_prompt_embeds": negative_embeds.repeat(repeat, 1, 1),
+        }
+    if not can_embed:
+        text = prompt_weights.plain_text(text)
+        negative_text = prompt_weights.plain_text(negative_text) if negative_text is not None else None
+    kwargs = {
+        "prompt": [text] * repeat if repeat > 1 else text,
+        "negative_prompt": ([negative_text] * repeat if repeat > 1 else negative_text) if negative_text is not None else None,
+    }
+    if clip_skip:
+        kwargs["clip_skip"] = clip_skip
+    return kwargs
+
+
+def _run_diffusion(
+    pipe,
+    sampler,
+    seed,
+    call_kwargs,
+    width,
+    height,
+    batch_size,
+    total_steps,
+    on_progress,
+    *,
+    images_out=None,
+    schedule="normal",
+    model=None,
+    node_id=None,
+):
+    """Build the scheduler, resolve the seed, and call `pipe(**call_kwargs)`
+    with per-image generators, progress (and live previews), and
+    out-of-memory handling. Returns {"seed": N, "seeds": [...], "result":
+    ([images],)} - the node output shape all three samplers share. Image i
+    of the batch is generated from seed + i, and carries that seed in its
+    .info so Save Image can embed it."""
+    torch = runtime.torch()
+    meta = models.pipeline_meta((model or {}).get("pipeline")) or models.pipeline_meta(pipe)
+    pipe.scheduler = make_scheduler(pipe, sampler, schedule, meta.get("scheduler_config"))
+    apply_loras((model or {}).get("pipeline", pipe), (model or {}).get("loras", []))
+
+    seed = int(seed)
+    if seed < 0:
+        seed = random.randint(0, MAX_SEED)
+    images_out = int(images_out or batch_size)
+    seeds = [(seed + i) % (MAX_SEED + 1) for i in range(images_out)]
+    arch = meta.get("arch") or (model or {}).get("arch") or models.ARCH_SD
+
+    last_preview = [0.0]
+
+    def _report_progress(pipe_self, step, timestep, callback_kwargs):
+        # diffusers' callback_on_step_end contract: called after each
+        # denoising step with (pipeline, step_index, timestep,
+        # callback_kwargs), and must return callback_kwargs. `step` is
+        # 0-based; report 1-based so a UI can show e.g. "3 / 20".
+        current = min(step + 1, total_steps)
+        info = {}
+        latents = callback_kwargs.get("latents")
+        now = time.monotonic()
+        if latents is not None and (now - last_preview[0] >= PREVIEW_INTERVAL_S or current == total_steps):
+            last_preview[0] = now
+            try:
+                image = latent_preview.latents_to_image(latents, arch)
+            except Exception:  # noqa: BLE001 - a preview must never break sampling
+                image = None
+            if image is not None:
+                info["preview"] = latent_preview.to_data_url(image)
+        on_progress(current, total_steps, **info)
+        return callback_kwargs
+
+    previews = on_progress is not None and getattr(on_progress, "wants_previews", False)
+    tile = width * height > VAE_TILING_MIN_PIXELS
+    for _attempt in range(2):
+        _set_vae_tiling(pipe, tile)
+        # Fresh generators per attempt, so a retry samples the same images.
+        device = getattr(pipe, "_execution_device", None) or pipe.device
+        generator_device = device if getattr(device, "type", str(device)) != "mps" else "cpu"
+        generators = [torch.Generator(device=generator_device).manual_seed(s) for s in seeds]
+        kwargs = dict(call_kwargs)
+        kwargs["generator"] = generators
+        if on_progress is not None:
+            kwargs["callback_on_step_end"] = _report_progress
+            if previews:
+                kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
+        out_of_memory = False
+        try:
+            result = pipe(**_supported_kwargs(pipe, kwargs))
+            images = list(result.images)
+            for index, image in enumerate(images):
+                image.info[SEED_INFO_KEY] = seeds[index] if index < len(seeds) else seed
+                if node_id is not None:
+                    image.info[NODE_INFO_KEY] = node_id
+                if model and model.get("name"):
+                    image.info[MODEL_INFO_KEY] = model["name"]
+            # Always a list (even for batch_size == 1) so every downstream
+            # IMAGE consumer sees one consistent batch shape (see
+            # nodes/base.py's as_image_list/map_images helpers).
+            return {"seed": seed, "seeds": seeds, "result": (images,)}
+        except runtime.oom_error():
+            # Handled outside the except block: the in-flight exception's
+            # traceback keeps the pipeline call's frames (and their GPU
+            # tensors) alive, so memory can't be freed until it's gone.
+            out_of_memory = True
+        if out_of_memory:
+            free_memory()
+            if tile or not _can_tile(pipe):
+                break
+            logger.warning("out of memory sampling %dx%d; retrying once with VAE tiling", width, height)
+            tile = True
+    raise RuntimeError(
+        f"Out of GPU memory while sampling {width}x{height} (batch_size={int(batch_size)}). "
+        "Try a smaller image size or batch_size, or close other GPU applications."
+    )
+
+
+def _source_images(image):
+    """An IMAGE input as a list of RGB images all sized like the first one
+    (snapped to multiples of 8) - one img2img/inpaint batch."""
+    images = [img.convert("RGB") for img in as_image_list(image)]
+    size = _snap8(images[0].size)
+    return [img if img.size == size else img.resize(size, Image.LANCZOS) for img in images], size
+
+
+def _denoise_steps(steps, denoise) -> int:
+    """How many steps an img2img/inpaint run actually takes (diffusers skips
+    the first (1 - strength) share of the schedule)."""
+    effective = min(int(int(steps) * float(denoise)), int(steps))
+    if effective < 1:
+        raise ValueError(
+            f"denoise {float(denoise):g} x steps {int(steps)} leaves no sampling steps - "
+            "raise denoise or steps (their product must be at least 1)"
+        )
+    return effective
 
 
 @register_node("KSampler")
-class KSamplerStub(NodeBase):
-    """Runs real Stable Diffusion sampling via the diffusers pipeline that
-    LoadCheckpoint attaches to `model`. `latent_image` only supplies the
-    output width/height (it's a plain RGB PIL.Image, not a real VAE latent),
-    so this is txt2img-only for now - no image-to-image or inpainting.
+class KSampler(NodeBase):
+    """Text-to-image sampling with the pipeline LoadCheckpoint attaches to
+    `model`. `latent_image` only supplies the output width/height (it's a
+    plain RGB image, not a real VAE latent) - use KSampler (Image) /
+    KSampler (Inpaint) to start from an existing image.
 
-    `sampler` swaps the pipeline's scheduler (see SCHEDULERS above). `seed`
-    reproduces the same output when >= 0; a negative seed (the default, -1)
-    picks a fresh random seed each run. `negative` is an optional second
-    CONDITIONING input (wire a second CLIPTextEncode into it) passed through
-    as the pipeline's `negative_prompt=`. `batch_size` generates more than
-    one image per run via `num_images_per_prompt=`; the output is always a
-    list of one or more PIL images. The seed actually used (after resolving
-    -1 to a random one) is reported in the node's UI output as `{"seed": N}`,
-    which lands in the prompt's history/`execution_success` message and in
-    Save/Preview Image's embedded PNG metadata.
+    `sampler` picks the scheduler and `scheduler` its sigma schedule
+    (normal/karras/trailing). `seed` reproduces the same output when >= 0;
+    -1 picks a random seed. Image i of a batch uses seed + i, so it can be
+    reproduced on its own (Save Image embeds each image's own seed). The
+    seeds used are reported as {"seed": N, "seeds": [...]}.
 
     For a distilled few-step checkpoint like the default
     `stabilityai/sd-turbo`, use 1-4 steps and cfg 0: diffusers only applies
@@ -86,24 +490,15 @@ class KSamplerStub(NodeBase):
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
     FUNCTION = "sample"
+    DESCRIPTION = "Generates images from a prompt (txt2img)."
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model": ("MODEL",),
-                "positive": ("CONDITIONING",),
-                "latent_image": ("IMAGE",),
-                "sampler": (list(SCHEDULERS.keys()), {"default": "euler"}),
-                "seed": ("INT", {"default": -1, "min": -1, "max": MAX_SEED}),
-                "steps": ("INT", {"default": 20, "min": 1, "max": 150}),
-                "cfg": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 30.0}),
-                "batch_size": ("INT", {"default": 1, "min": 1, "max": 8}),
-            },
-            "optional": {
-                "negative": ("CONDITIONING",),
-            },
-        }
+        return _sampler_inputs()
+
+    @classmethod
+    def IS_CHANGED(cls, **inputs):
+        return _sampler_is_changed(**inputs)
 
     def sample(
         self,
@@ -116,69 +511,197 @@ class KSamplerStub(NodeBase):
         cfg=7.0,
         batch_size=1,
         negative=None,
+        scheduler="normal",
+        unique_id=None,
         on_progress=None,
     ):
         pipe = model["pipeline"]
-
-        scheduler_cls = SCHEDULERS.get(sampler)
-        if scheduler_cls is not None and not isinstance(pipe.scheduler, scheduler_cls):
-            pipe.scheduler = scheduler_cls.from_config(pipe.scheduler.config)
-
-        text = positive.get("text", "")
-        negative_text = negative.get("text", "") if negative else None
-
         # latent_image may be a batch (e.g. another KSampler's output); only
         # its size matters here.
-        width, height = first_image(latent_image).size
-        # SD pipelines require dimensions that are multiples of 8.
-        width = max(8, (width // 8) * 8)
-        height = max(8, (height // 8) * 8)
+        width, height = _snap8(first_image(latent_image).size)
+        call_kwargs = {
+            **_prompt_kwargs(model, pipe, positive, negative, 1),
+            "width": width,
+            "height": height,
+            "num_inference_steps": int(steps),
+            "guidance_scale": float(cfg),
+            "num_images_per_prompt": int(batch_size),
+        }
+        return _run_diffusion(
+            pipe,
+            sampler,
+            seed,
+            call_kwargs,
+            width,
+            height,
+            batch_size,
+            int(steps),
+            on_progress,
+            schedule=scheduler,
+            model=model,
+            node_id=unique_id,
+        )
 
-        seed = int(seed)
-        if seed < 0:
-            seed = random.randint(0, MAX_SEED)
-        generator = torch.Generator(device=pipe.device).manual_seed(seed)
 
-        total_steps = int(steps)
+# The class was called KSamplerStub before; saved prompts/PNG metadata using
+# that name keep working through base.NODE_ALIASES.
+KSamplerStub = KSampler
 
-        def _report_progress(pipe_self, step, timestep, callback_kwargs):
-            # diffusers' callback_on_step_end contract: called after each
-            # denoising step with (pipeline, step_index, timestep,
-            # callback_kwargs), and must return callback_kwargs unmodified
-            # (or with any changes to the tensors it requested) for the loop
-            # to continue normally. `step` is 0-based; report 1-based so a
-            # UI can show e.g. "3 / 20" rather than "2 / 20".
-            on_progress(step + 1, total_steps)
-            return callback_kwargs
 
-        out_of_memory = False
-        try:
-            result = pipe(
-                prompt=text,
-                negative_prompt=negative_text,
-                width=width,
-                height=height,
-                num_inference_steps=total_steps,
-                guidance_scale=float(cfg),
-                num_images_per_prompt=int(batch_size),
-                generator=generator,
-                callback_on_step_end=_report_progress if on_progress is not None else None,
-            )
-        except OutOfMemoryError:
-            # Handled outside the except block: the in-flight exception's
-            # traceback keeps the pipeline call's frames (and their GPU
-            # tensors) alive, so memory can't be freed until it's gone.
-            out_of_memory = True
-        if out_of_memory:
-            # Return the failed run's activations to the driver; the cached
-            # pipeline's weights stay loaded so a smaller retry doesn't have
-            # to reload the checkpoint.
-            free_memory()
-            raise RuntimeError(
-                f"Out of GPU memory while sampling {width}x{height} (batch_size={int(batch_size)}). "
-                "Try a smaller image size or batch_size, or close other GPU applications."
-            )
-        # Always a list (even for batch_size == 1) so every downstream IMAGE
-        # consumer sees one consistent batch shape (see nodes/base.py's
-        # as_image_list/map_images helpers).
-        return {"seed": seed, "result": (list(result.images),)}
+@register_node("KSampler (Image)")
+class KSamplerImage(NodeBase):
+    """img2img: re-samples an existing IMAGE (Load Image, or another
+    sampler's output for a "hires fix": KSampler -> Resize -> this at ~0.4
+    denoise). `denoise` is diffusers' `strength`: 0 keeps the image, 1
+    ignores it; only about steps x denoise steps actually run. Uses an
+    img2img pipeline derived from the loaded checkpoint with from_pipe(), so
+    it shares the already-loaded weights. A batch IMAGE input is re-sampled
+    image by image (all resized to the first one's size), `batch_size`
+    variations each. Seeds, sampler, negative prompt and outputs work as in
+    KSampler."""
+
+    CATEGORY = "sampling"
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "sample"
+    DESCRIPTION = "Re-samples an existing image (img2img / hires fix)."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return _sampler_inputs(
+            {
+                "image": ("IMAGE",),
+                "denoise": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.01}),
+            }
+        )
+
+    @classmethod
+    def IS_CHANGED(cls, **inputs):
+        return _sampler_is_changed(**inputs)
+
+    def sample(
+        self,
+        model,
+        positive,
+        image,
+        denoise=0.6,
+        sampler="euler",
+        seed=-1,
+        steps=20,
+        cfg=7.0,
+        batch_size=1,
+        negative=None,
+        scheduler="normal",
+        unique_id=None,
+        on_progress=None,
+    ):
+        effective_steps = _denoise_steps(steps, denoise)
+        pipe = derived_pipeline(model["pipeline"], "img2img")
+        images, (width, height) = _source_images(image)
+        call_kwargs = {
+            **_prompt_kwargs(model, pipe, positive, negative, len(images)),
+            "image": images,
+            "strength": float(denoise),
+            "num_inference_steps": int(steps),
+            "guidance_scale": float(cfg),
+            "num_images_per_prompt": int(batch_size),
+        }
+        return _run_diffusion(
+            pipe,
+            sampler,
+            seed,
+            call_kwargs,
+            width,
+            height,
+            batch_size,
+            effective_steps,
+            on_progress,
+            images_out=len(images) * int(batch_size),
+            schedule=scheduler,
+            model=model,
+            node_id=unique_id,
+        )
+
+
+@register_node("KSampler (Inpaint)")
+class KSamplerInpaint(NodeBase):
+    """Inpainting: re-samples only the white area of `mask` (a MASK from
+    Load Image's alpha channel or Load Mask), keeping the rest of `image`.
+    Works with regular checkpoints (diffusers blends the latents outside the
+    mask); dedicated inpainting checkpoints give cleaner seams. A single
+    mask applies to every image of a batch; it's resized to the image size.
+    Uses an inpainting pipeline derived with from_pipe() (no extra weights).
+    `denoise` 1.0 repaints the masked area from scratch."""
+
+    CATEGORY = "sampling"
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "sample"
+    DESCRIPTION = "Repaints the white area of a mask."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return _sampler_inputs(
+            {
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+                "denoise": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+            }
+        )
+
+    @classmethod
+    def IS_CHANGED(cls, **inputs):
+        return _sampler_is_changed(**inputs)
+
+    def sample(
+        self,
+        model,
+        positive,
+        image,
+        mask,
+        denoise=1.0,
+        sampler="euler",
+        seed=-1,
+        steps=20,
+        cfg=7.0,
+        batch_size=1,
+        negative=None,
+        scheduler="normal",
+        unique_id=None,
+        on_progress=None,
+    ):
+        effective_steps = _denoise_steps(steps, denoise)
+        pipe = derived_pipeline(model["pipeline"], "inpaint")
+        images, (width, height) = _source_images(image)
+        masks = [m.convert("L") for m in as_image_list(mask)]
+        if len(masks) == 1:
+            masks = masks * len(images)
+        elif len(masks) != len(images):
+            raise ValueError(f"got {len(masks)} masks for {len(images)} images - use one mask or one per image")
+        masks = [m if m.size == (width, height) else m.resize((width, height), Image.BILINEAR) for m in masks]
+        call_kwargs = {
+            **_prompt_kwargs(model, pipe, positive, negative, len(images)),
+            "image": images,
+            "mask_image": masks,
+            "width": width,
+            "height": height,
+            "strength": float(denoise),
+            "num_inference_steps": int(steps),
+            "guidance_scale": float(cfg),
+            "num_images_per_prompt": int(batch_size),
+        }
+        return _run_diffusion(
+            pipe,
+            sampler,
+            seed,
+            call_kwargs,
+            width,
+            height,
+            batch_size,
+            effective_steps,
+            on_progress,
+            images_out=len(images) * int(batch_size),
+            schedule=scheduler,
+            model=model,
+            node_id=unique_id,
+        )

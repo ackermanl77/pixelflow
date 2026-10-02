@@ -1,38 +1,53 @@
 import io
 import json
 import logging
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from . import paths
+from .config import APP_ID, app_version
 from .engine.graph import PromptValidationError, validate_prompt
 from .engine.queue import ConnectionManager, ExecutionQueue
-from .nodes import NODE_REGISTRY
-from .paths import FRONTEND_DIR, OUTPUT_DIR, PathTraversalError, UPLOAD_DIR, WORKFLOW_DIR, safe_path, sanitize_filename
-from .security import ALLOWED_HOSTS, LocalOriginMiddleware
+from .logging_setup import log_runtime_info, setup_logging
+from .nodes import NODE_ALIASES, NODE_REGISTRY, io_nodes, models, runtime
+from .nodes.io_nodes import list_uploads
+from .paths import (
+    FRONTEND_DIR,
+    HISTORY_PATH,
+    PathTraversalError,
+    UPLOAD_DIR,
+    WORKFLOW_DIR,
+    safe_path,
+    sanitize_filename,
+)
+from .security import ALLOWED_HOSTS, LocalOriginMiddleware, MaxBodySizeMiddleware
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# Handlers (stderr + a rotating logs/pixelflow.log) are attached by
+# setup_logging() at startup, not at import, so importing this module
+# (e.g. from the tests) never creates a log file.
 logger = logging.getLogger(__name__)
 
-# Returned by /api/health so desktop.py can tell this server apart from some
-# other app (e.g. ComfyUI) already listening on the same port.
-APP_ID = "pixelflow"
-
-app = FastAPI(title="PixelFlow")
-# See backend/security.py. add_middleware() wraps outermost-last, so the
-# Host check runs first, then the Origin check.
-app.add_middleware(LocalOriginMiddleware)
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 manager = ConnectionManager()
-queue = ExecutionQueue(manager)
+# Finished prompts are appended to history.jsonl and restored at startup.
+queue = ExecutionQueue(manager, history_path=HISTORY_PATH)
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
+# Any other request body (prompts, workflows) - see security.MaxBodySizeMiddleware.
+MAX_REQUEST_BYTES = 5 * 1024 * 1024
 ALLOWED_UPLOAD_CONTENT_TYPES = {
     "image/png",
     "image/jpeg",
@@ -41,6 +56,53 @@ ALLOWED_UPLOAD_CONTENT_TYPES = {
     "image/bmp",
     "image/tiff",
 }
+
+
+def clear_temp_dir(folder: Optional[Path] = None) -> int:
+    """Delete Preview Image's throwaway files (temp/ is emptied at every
+    start). Returns how many files were removed."""
+    folder = Path(folder or io_nodes.TEMP_DIR)
+    removed = 0
+    if not folder.is_dir():
+        return 0
+    for path in folder.iterdir():
+        try:
+            if path.is_file() and not path.name.startswith("."):
+                path.unlink()
+                removed += 1
+        except OSError:
+            logger.debug("could not remove %s", path, exc_info=True)
+    return removed
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    log_file = setup_logging()
+    if log_file is not None:
+        logger.info("logging to %s", log_file)
+    logger.info("PixelFlow %s, data folder %s, models folder %s", app_version(), paths.ROOT_DIR, paths.MODELS_DIR)
+    paths.ensure_data_dirs()
+    clear_temp_dir()
+    restored = queue.load_history()
+    if restored:
+        logger.info("restored %d history entries from %s", restored, queue.history_path)
+    queue.start()
+    # torch/diffusers load in the background (report item P6): the UI is
+    # usable right away and the first prompt doesn't pay for the import.
+    runtime.warm_up_in_background(lambda: log_runtime_info(logger))
+    yield
+
+
+app = FastAPI(title="PixelFlow", lifespan=lifespan)
+# See backend/security.py. add_middleware() wraps outermost-last, so the
+# Host check runs first, then the Origin check, then the body-size cap.
+app.add_middleware(
+    MaxBodySizeMiddleware,
+    default_limit=MAX_REQUEST_BYTES,
+    limits={"/api/upload": lambda: MAX_UPLOAD_BYTES + 1024 * 1024},
+)
+app.add_middleware(LocalOriginMiddleware)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 
 class NodeSpec(BaseModel):
@@ -55,6 +117,8 @@ class QueueRequest(BaseModel):
     # ComfyUI's shape: {"extra_pnginfo": {"workflow": <litegraph graph>}} -
     # embedded into saved PNGs next to the prompt itself.
     extra_data: Dict[str, Any] = Field(default_factory=dict)
+    # Run before everything already pending (Ctrl+Shift+Enter).
+    front: bool = False
 
 
 class WorkflowPayload(BaseModel):
@@ -64,9 +128,17 @@ class WorkflowPayload(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-@app.on_event("startup")
-async def _startup() -> None:
-    queue.start()
+class RenameRequest(BaseModel):
+    new_name: str
+
+
+class InterruptRequest(BaseModel):
+    prompt_id: Optional[str] = None
+
+
+class OutputRef(BaseModel):
+    filename: str
+    type: str = "output"
 
 
 def _node_info() -> dict:
@@ -75,7 +147,10 @@ def _node_info() -> dict:
         info[name] = {
             "display_name": cls.DISPLAY_NAME,
             "category": cls.CATEGORY,
-            "input_types": cls.INPUT_TYPES(),
+            "description": getattr(cls, "DESCRIPTION", "") or "",
+            "input_types": {
+                key: value for key, value in cls.INPUT_TYPES().items() if key in ("required", "optional")
+            },
             "return_types": list(cls.RETURN_TYPES),
             "return_names": list(cls.RETURN_NAMES),
             "output_node": bool(getattr(cls, "OUTPUT_NODE", False)),
@@ -85,12 +160,18 @@ def _node_info() -> dict:
 
 @app.get("/api/health")
 async def health():
-    return {"app": APP_ID, "status": "ok"}
+    return {"app": APP_ID, "status": "ok", "version": app_version()}
 
 
 @app.get("/api/nodes")
-async def get_nodes():
+def get_nodes():
     return _node_info()
+
+
+@app.get("/api/node_aliases")
+async def get_node_aliases():
+    """Old node class names -> current ones (for loading old workflows)."""
+    return dict(NODE_ALIASES)
 
 
 @app.post("/api/queue")
@@ -101,24 +182,66 @@ async def post_queue(request: QueueRequest):
     try:
         prompt = validate_prompt(prompt)
     except PromptValidationError as exc:
-        raise HTTPException(400, str(exc)) from None
+        # {"detail": {"message", "node_id", "class_type", "input"}} so the
+        # frontend can mark the offending node and input.
+        raise HTTPException(400, exc.to_dict()) from None
     extra_pnginfo = request.extra_data.get("extra_pnginfo") or {}
     if not isinstance(extra_pnginfo, dict):
         raise HTTPException(400, "'extra_data.extra_pnginfo' must be an object")
-    prompt_id = await queue.submit(prompt, extra_pnginfo)
+    prompt_id = await queue.submit(prompt, extra_pnginfo, front=request.front)
     return {"prompt_id": prompt_id}
 
 
 @app.post("/api/interrupt")
-async def interrupt_prompt():
-    """Stop the currently running prompt at its next node or diffusion step."""
-    prompt_id = queue.interrupt()
-    return {"interrupted": prompt_id}
+async def interrupt_prompt(request: Optional[InterruptRequest] = Body(None)):
+    """Stop the running prompt at its next node or diffusion step. With
+    {"prompt_id"}, only if that prompt is the one running (409 otherwise),
+    so a stale Cancel button can't stop a different prompt."""
+    prompt_id = request.prompt_id if request is not None else None
+    interrupted = queue.interrupt(prompt_id)
+    if prompt_id is not None and interrupted is None:
+        raise HTTPException(409, f"Prompt '{prompt_id}' is not running")
+    return {"interrupted": interrupted}
+
+
+@app.get("/api/queue")
+async def get_queue():
+    """{"running": prompt_id | null, "pending": [prompt_id, ...] in run order}
+    - lets a reloaded or reconnected page rebuild its queue panel."""
+    return queue.queue_state()
+
+
+@app.delete("/api/queue")
+async def cancel_all_pending():
+    """Cancel every prompt that hasn't started yet."""
+    cancelled = queue.cancel_all()
+    for prompt_id in cancelled:
+        await manager.broadcast({"type": "execution_cancelled", "prompt_id": prompt_id})
+    return {"cancelled": cancelled}
 
 
 @app.get("/api/history")
-async def get_history():
-    return queue.history
+async def get_history(
+    limit: Optional[int] = Query(None, ge=1, le=1000),
+    before: Optional[str] = Query(None, max_length=64),
+):
+    """History entries keyed by prompt id, oldest first. `limit` keeps only
+    the newest N; `before` (a prompt id) pages further back."""
+    return queue.history_page(limit=limit, before=before)
+
+
+@app.delete("/api/history")
+async def clear_finished_history():
+    """Delete every finished entry (queued/running ones stay)."""
+    return {"deleted": queue.clear_finished()}
+
+
+@app.get("/api/history/{prompt_id}")
+async def get_history_entry(prompt_id: str):
+    entry = queue.history.get(prompt_id)
+    if entry is None:
+        raise HTTPException(404, "History entry not found")
+    return entry
 
 
 @app.delete("/api/queue/{prompt_id}")
@@ -140,6 +263,7 @@ def _open_unique(stem: str, suffix: str):
     """Create (exclusively) a new file in UPLOAD_DIR named stem+suffix, or
     stem_1+suffix, stem_2+suffix, ... if taken, so an upload never silently
     overwrites an earlier one. Returns (path, open binary file)."""
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     for attempt in range(10_000):
         name = f"{stem}{suffix}" if attempt == 0 else f"{stem}_{attempt}{suffix}"
         dest = safe_path(UPLOAD_DIR, name)
@@ -193,30 +317,250 @@ async def upload_image(file: UploadFile = File(...)):
     return {"filename": dest.name}
 
 
+@app.get("/api/uploads")
+async def get_uploads():
+    """Filenames available to Load Image / Load Mask (sorted)."""
+    return list_uploads()
+
+
+@app.get("/uploads/{filename}")
+async def get_upload(filename: str):
+    """Serve an uploaded image (the Load Image node's thumbnail). A route
+    rather than a StaticFiles mount so it follows UPLOAD_DIR at request time."""
+    try:
+        path = safe_path(UPLOAD_DIR, filename)
+    except PathTraversalError:
+        raise HTTPException(404, "Not found") from None
+    if not path.is_file() or path.name.startswith("."):
+        raise HTTPException(404, "Not found")
+    return FileResponse(path)
+
+
+# ---- generated images (outputs/ and the temp/ previews) ----
+
+
+def _image_folder(kind: str) -> Path:
+    if kind == "output":
+        return io_nodes.OUTPUT_DIR
+    if kind == "temp":
+        return io_nodes.TEMP_DIR
+    raise HTTPException(400, "type must be 'output' or 'temp'")
+
+
+def _generated_file(kind: str, filename: str) -> Path:
+    try:
+        path = safe_path(_image_folder(kind), filename)
+    except PathTraversalError:
+        raise HTTPException(404, "Not found") from None
+    if not path.is_file() or path.name.startswith(".") or path.suffix.lower() != ".png":
+        raise HTTPException(404, "Not found")
+    return path
+
+
+@app.get("/outputs/{filename:path}")
+async def get_output(filename: str):
+    return FileResponse(_generated_file("output", filename))
+
+
+@app.get("/temp/{filename:path}")
+async def get_temp(filename: str):
+    return FileResponse(_generated_file("temp", filename), headers={"Cache-Control": "no-store"})
+
+
+@app.delete("/api/outputs/{filename:path}")
+async def delete_output(filename: str, type: str = Query("output")):  # noqa: A002 - API field name
+    """Delete a generated image (gallery "Delete")."""
+    path = _generated_file(type, filename)
+    path.unlink()
+    return {"deleted": filename}
+
+
+@app.post("/api/outputs/to-upload")
+async def output_to_upload(ref: OutputRef):
+    """Copy a generated image into uploads/ (gallery "Send to Load Image")
+    and return its upload filename."""
+    source = _generated_file(ref.type, ref.filename)
+    stem = sanitize_filename(Path(ref.filename).stem, default="output")
+    dest, handle = _open_unique(stem, ".png")
+    with handle, open(source, "rb") as src:
+        shutil.copyfileobj(src, handle)
+    return {"filename": dest.name}
+
+
+# ---- models and system ----
+
+
+@app.get("/api/models/{kind}")
+def get_models(kind: str):
+    """Installed models of a kind: checkpoints (files and diffusers folders
+    in models/checkpoints/, plus diffusers pipelines in the Hugging Face
+    cache) or loras (models/loras/*.safetensors)."""
+    try:
+        return models.list_models(kind)
+    except KeyError:
+        raise HTTPException(404, f"Unknown model kind '{kind}' (use one of {sorted(models.MODEL_KINDS)})") from None
+
+
+def _system_info() -> Dict[str, Any]:
+    t = runtime.torch()
+    info: Dict[str, Any] = {
+        "app": APP_ID,
+        "version": app_version(),
+        "python": platform.python_version(),
+        "torch": t.__version__,
+        "cuda": t.version.cuda,
+        "device": "cpu",
+        "device_name": platform.processor() or "CPU",
+        "vram_free": None,
+        "vram_total": None,
+        "loaded_models": models.PIPELINES.describe(),
+        "data_dir": str(paths.ROOT_DIR),
+        "models_dir": str(paths.MODELS_DIR),
+        "log_dir": str(paths.LOG_DIR),
+    }
+    try:
+        import diffusers
+
+        info["diffusers"] = diffusers.__version__
+    except Exception:  # noqa: BLE001 - informational
+        info["diffusers"] = None
+    if t.cuda.is_available():
+        free, total = t.cuda.mem_get_info()
+        info.update(
+            device="cuda",
+            device_name=t.cuda.get_device_name(0),
+            vram_free=int(free),
+            vram_total=int(total),
+            vram_allocated=int(t.cuda.memory_allocated()),
+        )
+    return info
+
+
+@app.get("/api/system")
+def get_system():
+    """Versions, device, VRAM and the loaded models (top bar / System panel)."""
+    return _system_info()
+
+
+@app.post("/api/free")
+def free_models():
+    """Unload every cached pipeline and node output and give the memory back
+    (e.g. to use the GPU for something else)."""
+    unloaded = models.PIPELINES.clear()
+    queue.output_cache.clear()
+    runtime.free_memory()
+    return {"unloaded": unloaded}
+
+
+def _open_folder(folder: Path) -> None:
+    if sys.platform == "win32":
+        os.startfile(str(folder))  # noqa: S606 - a fixed local folder, not user input
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(folder)])  # noqa: S603,S607
+    else:
+        subprocess.Popen(["xdg-open", str(folder)])  # noqa: S603,S607
+
+
+@app.post("/api/logs/open")
+def open_log_folder():
+    """Open the log folder in the file manager (desktop use; the server
+    only listens on loopback)."""
+    folder = paths.LOG_DIR
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        _open_folder(folder)
+    except OSError as exc:
+        raise HTTPException(500, f"Could not open {folder}: {exc}") from None
+    return {"opened": str(folder)}
+
+
+# ---- workflows ----
+
+# Workflow names become filenames, so they're validated rather than trusted:
+# letters/digits/underscore first, then also spaces, '.', '-', '(' and ')',
+# at most 100 characters, no trailing dot or space (Windows strips those,
+# which made "a." and "a" look-alike files), and none of Windows' reserved
+# device names. Anything else is a 400 instead of an OS-level 500.
+_WORKFLOW_NAME = re.compile(r"[\w][\w .()-]{0,99}")
+_RESERVED_WINDOWS_NAMES = {"CON", "PRN", "AUX", "NUL"} | {f"{p}{i}" for p in ("COM", "LPT") for i in range(1, 10)}
+INVALID_WORKFLOW_NAME = (
+    "Invalid workflow name: use 1-100 letters, digits, spaces, '_', '-', '.', '(' or ')', "
+    "starting with a letter or digit and not ending in a dot or space"
+)
+
+
+def is_valid_workflow_name(name: str) -> bool:
+    if not _WORKFLOW_NAME.fullmatch(name) or name.endswith((".", " ")):
+        return False
+    return name.split(".")[0].rstrip().upper() not in _RESERVED_WINDOWS_NAMES
+
+
+def _workflow_path(name: str) -> Path:
+    if not is_valid_workflow_name(name):
+        raise HTTPException(400, INVALID_WORKFLOW_NAME)
+    try:
+        return safe_path(WORKFLOW_DIR, f"{name}.json")
+    except PathTraversalError:
+        raise HTTPException(400, INVALID_WORKFLOW_NAME) from None
+
+
 @app.get("/api/workflows")
 async def list_workflows():
-    return sorted(p.stem for p in WORKFLOW_DIR.glob("*.json"))
+    """[{name, modified (unix time), size (bytes)}], sorted by name."""
+    if not WORKFLOW_DIR.is_dir():
+        return []
+    items = []
+    for path in WORKFLOW_DIR.glob("*.json"):
+        if not is_valid_workflow_name(path.stem):
+            continue
+        stat = path.stat()
+        items.append({"name": path.stem, "modified": stat.st_mtime, "size": stat.st_size})
+    return sorted(items, key=lambda item: item["name"].lower())
 
 
 @app.get("/api/workflows/{name}")
 async def load_workflow(name: str):
-    try:
-        path = safe_path(WORKFLOW_DIR, f"{name}.json")
-    except PathTraversalError:
-        raise HTTPException(400, "Invalid workflow name")
-    if not path.exists():
+    path = _workflow_path(name)
+    if not path.is_file():
         raise HTTPException(404, "Workflow not found")
-    return JSONResponse(json.loads(path.read_text()))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(422, f"Workflow '{name}' is not valid JSON") from None
+    return JSONResponse(data)
 
 
 @app.post("/api/workflows/{name}")
-async def save_workflow(name: str, payload: WorkflowPayload):
-    try:
-        path = safe_path(WORKFLOW_DIR, f"{name}.json")
-    except PathTraversalError:
-        raise HTTPException(400, "Invalid workflow name")
-    path.write_text(json.dumps(payload.model_dump(), indent=2))
+async def save_workflow(name: str, payload: WorkflowPayload, overwrite: bool = Query(True)):
+    """Save a workflow. With ?overwrite=false an existing one is a 409, so
+    the UI can ask before replacing it."""
+    path = _workflow_path(name)
+    if path.exists() and not overwrite:
+        raise HTTPException(409, f"A workflow named '{name}' already exists")
+    WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload.model_dump(), indent=2, ensure_ascii=False), encoding="utf-8")
     return {"saved": name}
+
+
+@app.delete("/api/workflows/{name}")
+async def delete_workflow(name: str):
+    path = _workflow_path(name)
+    if not path.is_file():
+        raise HTTPException(404, "Workflow not found")
+    path.unlink()
+    return {"deleted": name}
+
+
+@app.post("/api/workflows/{name}/rename")
+async def rename_workflow(name: str, request: RenameRequest, overwrite: bool = Query(False)):
+    source = _workflow_path(name)
+    target = _workflow_path(request.new_name)
+    if not source.is_file():
+        raise HTTPException(404, "Workflow not found")
+    if target.exists() and not overwrite and target.name.lower() != source.name.lower():
+        raise HTTPException(409, f"A workflow named '{request.new_name}' already exists")
+    source.replace(target)
+    return {"renamed": name, "to": request.new_name}
 
 
 @app.websocket("/ws")
@@ -229,5 +573,15 @@ async def websocket_endpoint(ws: WebSocket):
         manager.disconnect(ws)
 
 
-app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
-app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+class NoCacheStaticFiles(StaticFiles):
+    """The frontend's own files are revalidated on every load (a 304 when
+    unchanged), so an updated app.js is never served from a stale browser
+    cache - no more manual ?v=N cache-busting in index.html."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/", NoCacheStaticFiles(directory=str(FRONTEND_DIR), html=True, check_dir=False), name="frontend")

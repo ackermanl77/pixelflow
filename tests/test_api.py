@@ -104,12 +104,67 @@ def test_websocket_accepts_same_origin_and_no_origin(client):
 
 
 def test_queue_rejects_an_invalid_graph_with_400_naming_the_node(client, fresh_queue):
-    bad = {"1": {"class_type": "EmptyImage", "inputs": {"width": 999999, "height": 64, "color": "#000"}}}
+    bad = {
+        "1": {"class_type": "EmptyImage", "inputs": {"width": 999999, "height": 64, "color": "#000"}},
+        "2": {"class_type": "PreviewImage", "inputs": {"image": ["1", 0]}},
+    }
     res = client.post("/api/queue", json={"prompt": bad})
     assert res.status_code == 400
-    assert "Node '1'" in res.json()["detail"]
-    assert "maximum" in res.json()["detail"]
+    detail = res.json()["detail"]
+    assert "Node '1'" in detail["message"]
+    assert "maximum" in detail["message"]
+    # Structured so the frontend can outline the node and mark the input.
+    assert detail["node_id"] == "1"
+    assert detail["class_type"] == "EmptyImage"
+    assert detail["input"] == "width"
     assert fresh_queue.history == {}
+
+
+def test_queue_rejects_a_prompt_without_output_nodes(client, fresh_queue):
+    only_image = {"1": {"class_type": "EmptyImage", "inputs": {"width": 64, "height": 64, "color": "#000"}}}
+    res = client.post("/api/queue", json={"prompt": only_image})
+    assert res.status_code == 400
+    assert "no output nodes" in res.json()["detail"]["message"]
+    assert res.json()["detail"]["node_id"] is None
+
+
+def test_queue_ignores_an_unconnected_half_built_branch(client, fresh_queue):
+    prompt = dict(VALID_PROMPT)
+    prompt["stray"] = {"class_type": "ImageBlur", "inputs": {"radius": 2.0}}  # 'image' unconnected
+    res = client.post("/api/queue", json={"prompt": prompt})
+    assert res.status_code == 200
+    _, queued, _ = fresh_queue.pending.get_nowait()
+    assert set(queued) == {"1", "2"}
+
+
+def test_get_queue_reports_running_and_pending_in_order(client, fresh_queue):
+    first = client.post("/api/queue", json={"prompt": VALID_PROMPT}).json()["prompt_id"]
+    second = client.post("/api/queue", json={"prompt": VALID_PROMPT}).json()["prompt_id"]
+    fresh_queue.running_prompt_id = "xyz"
+    assert client.get("/api/queue").json() == {"running": "xyz", "pending": [first, second]}
+    client.delete(f"/api/queue/{first}")
+    assert client.get("/api/queue").json()["pending"] == [second]
+
+
+def test_history_endpoint_supports_limit_before_and_single_entry(client, fresh_queue):
+    for i in range(5):
+        fresh_queue._record_history(f"p{i}", {"status": "completed", "outputs": {}})
+    assert list(client.get("/api/history").json()) == ["p0", "p1", "p2", "p3", "p4"]
+    assert list(client.get("/api/history?limit=2").json()) == ["p3", "p4"]
+    assert list(client.get("/api/history?limit=2&before=p3").json()) == ["p1", "p2"]
+    assert client.get("/api/history?limit=0").status_code == 422
+    assert client.get("/api/history/p2").json()["status"] == "completed"
+    assert client.get("/api/history/nope").status_code == 404
+
+
+def test_queued_history_entry_records_prompt_workflow_and_time(client, fresh_queue):
+    body = {"prompt": VALID_PROMPT, "extra_data": {"extra_pnginfo": {"workflow": {"nodes": [1]}}}}
+    prompt_id = client.post("/api/queue", json=body).json()["prompt_id"]
+    entry = fresh_queue.history[prompt_id]
+    assert entry["status"] == "queued"
+    assert set(entry["prompt"]) == {"1", "2"}
+    assert entry["workflow"] == {"nodes": [1]}
+    assert isinstance(entry["queued_at"], float)
 
 
 def test_queue_accepts_workflow_extra_data(client, fresh_queue):

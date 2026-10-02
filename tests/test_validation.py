@@ -115,6 +115,7 @@ def test_cycle_is_rejected_before_execution():
     graph = {
         "a": {"class_type": "ImageBlur", "inputs": {"image": ["b", 0], "radius": 1.0}},
         "b": {"class_type": "ImageBlur", "inputs": {"image": ["a", 0], "radius": 1.0}},
+        "out": {"class_type": "PreviewImage", "inputs": {"image": ["b", 0]}},
     }
     with pytest.raises(PromptValidationError, match="cycle"):
         validate_prompt(graph)

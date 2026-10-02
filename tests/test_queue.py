@@ -1,11 +1,11 @@
 import asyncio
 
 import pytest
-from huggingface_hub.errors import HfHubHTTPError
-from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from backend.engine.graph import execute_prompt
 from backend.engine.queue import ConnectionManager, ExecutionQueue
+
+from _hub import skip_if_hub_unreachable
 
 # Same tiny, randomly-initialized-weights checkpoint test_graph.py uses to
 # exercise the real diffusers pipeline without downloading a production model.
@@ -97,8 +97,9 @@ def test_execution_queue_broadcasts_progress_during_a_real_pipeline_run():
     }
     try:
         execute_prompt(warmup_prompt)
-    except (HfHubHTTPError, RequestsConnectionError) as exc:
-        pytest.skip(f"Hugging Face Hub unreachable: {exc}")
+    except Exception as exc:
+        skip_if_hub_unreachable(exc)
+        raise
 
     prompt = {
         "ckpt": {"class_type": "LoadCheckpoint", "inputs": {"ckpt_name": TINY_SD_CHECKPOINT}},

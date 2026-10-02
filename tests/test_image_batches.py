@@ -2,13 +2,13 @@
 as well as a single PIL image."""
 
 import pytest
-from huggingface_hub.errors import HfHubHTTPError
 from PIL import Image
-from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from backend.engine.graph import execute_prompt
 from backend.nodes import NODE_REGISTRY
 from backend.nodes.base import NodeBase, map_image_pairs, register_node
+
+from _hub import skip_if_hub_unreachable
 
 TINY_SD_CHECKPOINT = "hf-internal-testing/tiny-stable-diffusion-torch"
 
@@ -110,6 +110,7 @@ def test_real_ksampler_output_into_blur_and_as_latent_image(output_dir):
     }
     try:
         outputs = execute_prompt(prompt)
-    except (HfHubHTTPError, RequestsConnectionError) as exc:
-        pytest.skip(f"Hugging Face Hub unreachable: {exc}")
+    except Exception as exc:
+        skip_if_hub_unreachable(exc)
+        raise
     assert len(outputs["save"]["images"]) == 2

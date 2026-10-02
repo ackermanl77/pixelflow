@@ -2,13 +2,13 @@ import asyncio
 import threading
 
 import pytest
-from huggingface_hub.errors import HfHubHTTPError
-from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from backend.engine.graph import ExecutionInterrupted, execute_prompt
 from backend.engine.queue import ConnectionManager, ExecutionQueue
 from backend.nodes import NODE_REGISTRY
 from backend.nodes.base import NodeBase, register_node
+
+from _hub import skip_if_hub_unreachable
 
 TINY_SD_CHECKPOINT = "hf-internal-testing/tiny-stable-diffusion-torch"
 
@@ -125,8 +125,9 @@ def test_interrupt_reaches_a_real_diffusers_step_callback():
     progress = []
     try:
         execute_prompt({"ckpt": prompt["ckpt"]})  # warm the cache / skip if offline
-    except (HfHubHTTPError, RequestsConnectionError) as exc:
-        pytest.skip(f"Hugging Face Hub unreachable: {exc}")
+    except Exception as exc:
+        skip_if_hub_unreachable(exc)
+        raise
 
     with pytest.raises(ExecutionInterrupted):
         execute_prompt(
