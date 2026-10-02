@@ -37,6 +37,18 @@ def test_lock_file_pins_the_tested_versions_and_the_build_uses_it():
     assert re.search(r"^peft", requirements, re.MULTILINE)
 
 
+def test_build_runs_in_its_own_venv_and_never_installs_into_the_base_interpreter():
+    assert '$BuildVenv = Join-Path $ProjectRoot "build-venv"' in BUILD
+    assert "& $Python -m venv $BuildVenv" in BUILD
+    # $Python is only the base interpreter: the one thing it may run is "-m venv".
+    uses = re.findall(r"& \$Python\b(.*)", BUILD)
+    assert uses == [" -m venv $BuildVenv"], uses
+    for step in ("-m pip install torch", "-m pip install -r requirements.txt", "-m PyInstaller"):
+        assert f"& $BuildPython {step}" in BUILD, step
+    assert "-Python (Get-Command python).Source" in RELEASE, "CI passes the base interpreter"
+    assert "/build-venv/" in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+
+
 def test_spec_collects_webview_and_drops_torch_build_files():
     tree = ast.parse(SPEC)  # it's Python
     assert tree

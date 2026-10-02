@@ -5,15 +5,19 @@ param(
     # SHA-1 thumbprint of the code-signing certificate in the certificate store (signtool /sha1).
     # (Was misleadingly called -CertificateSubject.)
     [string]$CertificateThumbprint = "",
-    # Build with a specific interpreter instead of the default lookup below (.venv, then "python"
-    # on PATH). PyInstaller bundles whatever torch the interpreter running it has, so building from
-    # a CPU-only torch ships a CPU-only app -- see the CUDA guard below.
+    # The *base* interpreter the build venv is created from (not the one PyInstaller runs in).
+    # Default: `py -3.14` when the Python launcher is present, else whatever "python" is on PATH.
+    # The build always runs in a fresh build-venv\ made from it, so it never installs into (or
+    # depends on what else is in) the dev .venv -- what ships depends only on the requirement files.
     [string]$Python = "",
+    # Reuse an existing build-venv\ instead of recreating it, and keep it after the build (faster
+    # local rebuilds; never used by CI).
+    [switch]$ReuseVenv,
     # PyTorch wheel index torch is installed from before requirements.txt (PyPI's Windows torch
     # wheel is CPU-only). cu130 matches the last shipped build (torch 2.14.0+cu130) and needs an
     # NVIDIA driver >= 580; RTX 50-series (sm_120) needs CUDA 12.8 or newer either way. If torch is
-    # already installed, pip leaves it alone -- the guard below still checks what's there. Pass ""
-    # to skip this step (e.g. with -AllowCpu).
+    # already installed (only possible with -ReuseVenv), pip leaves it alone -- the guard below
+    # still checks what's there. Pass "" to skip this step (e.g. with -AllowCpu).
     [string]$TorchIndexUrl = "https://download.pytorch.org/whl/cu130",
     # Allow building with a CPU-only torch. Without it, the build stops before PyInstaller when
     # torch has no CUDA support, instead of silently shipping an app that can't use the GPU.
@@ -34,14 +38,20 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 if (-not $Python) {
-    # The project's own .venv first, then whatever "python" resolves to on PATH (e.g. a CI runner
+    # The Python launcher's 3.14 first, then whatever "python" resolves to on PATH (e.g. a CI runner
     # set up via actions/setup-python). No machine-specific paths: pass -Python for anything else.
-    $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-    if (-not (Test-Path $Python)) {
+    $launcher = Get-Command py -ErrorAction SilentlyContinue
+    if ($launcher) {
+        $Python = (& $launcher.Source -3.14 -c "import sys; print(sys.executable)" 2>$null)
+    }
+    if (-not $Python) {
         $onPath = Get-Command python -ErrorAction SilentlyContinue
         if ($onPath) { $Python = $onPath.Source }
     }
 }
+# Everything is installed into, and PyInstaller runs from, this venv -- never $Python itself.
+$BuildVenv = Join-Path $ProjectRoot "build-venv"
+$BuildPython = Join-Path $BuildVenv "Scripts\python.exe"
 $Dist = Join-Path $ProjectRoot "dist-release"
 $Build = Join-Path $ProjectRoot "build-release"
 # The only unpacked copy of the finished app: a fixed name, so the built .exe always has one stable,
@@ -77,7 +87,7 @@ function Invoke-PythonSnippet([string]$Code, [string[]]$Arguments = @()) {
     $file = Join-Path ([System.IO.Path]::GetTempPath()) ("pixelflow-build-" + [guid]::NewGuid().ToString("N") + ".py")
     [System.IO.File]::WriteAllText($file, $Code, (New-Object System.Text.UTF8Encoding $false))
     try {
-        & $Python $file @Arguments | ForEach-Object { Write-Host $_ }
+        & $BuildPython $file @Arguments | ForEach-Object { Write-Host $_ }
         return $LASTEXITCODE
     } finally {
         Remove-Item $file -ErrorAction SilentlyContinue
@@ -101,8 +111,8 @@ function Remove-Tree([string]$Path) {
     }
 }
 
-if (-not (Test-Path $Python)) {
-    throw "Python interpreter not found. Create .venv, put python on PATH, or pass -Python."
+if (-not $Python -or -not (Test-Path $Python)) {
+    throw "Base Python interpreter not found. Install Python 3.14 (or put python on PATH, or pass -Python <path>)."
 }
 # Check the signing setup before the multi-minute build, not after it.
 if ($Sign) {
@@ -123,7 +133,15 @@ Push-Location $ProjectRoot
 try {
     # $ErrorActionPreference doesn't cover native commands -- check their exit codes explicitly, so a
     # failed install or build stops here instead of packaging (and cleaning up around) a stale output.
-    Write-Host "Building with $Python"
+    if ((Test-Path $BuildVenv) -and -not $ReuseVenv) { Remove-Tree $BuildVenv }
+    if (-not (Test-Path $BuildPython)) {
+        Write-Host "Creating build venv $BuildVenv from $Python"
+        & $Python -m venv $BuildVenv
+        if ($LASTEXITCODE -ne 0) { throw "Creating the build venv failed (exit code $LASTEXITCODE)." }
+    }
+    & $BuildPython -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed (exit code $LASTEXITCODE)." }
+    Write-Host "Building with $BuildPython"
     # requirements-lock.txt pins the exact versions the app was tested with (scripts/make_lock.py);
     # as a constraints file it only fixes versions, it never adds packages.
     $constraints = @()
@@ -133,12 +151,12 @@ try {
         # replace it, and on Windows the PyPI wheel it would otherwise pick is CPU-only. Constrained
         # too: an unpinned newer torch from the index would otherwise be swapped for the locked
         # version from PyPI (CPU-only) by the requirements.txt step below.
-        & $Python -m pip install torch --index-url $TorchIndexUrl @constraints
+        & $BuildPython -m pip install torch --index-url $TorchIndexUrl @constraints
         if ($LASTEXITCODE -ne 0) { throw "pip install torch --index-url $TorchIndexUrl failed (exit code $LASTEXITCODE)." }
     }
-    & $Python -m pip install -r requirements.txt @constraints
+    & $BuildPython -m pip install -r requirements.txt @constraints
     if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements.txt failed (exit code $LASTEXITCODE)." }
-    & $Python -m pip install -r requirements-desktop.txt @constraints
+    & $BuildPython -m pip install -r requirements-desktop.txt @constraints
     if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements-desktop.txt failed (exit code $LASTEXITCODE)." }
 
     # CUDA guard: PyInstaller bundles whatever torch this interpreter has. Exit code 3 = CPU-only
@@ -162,7 +180,7 @@ sys.exit(0 if (major, minor) >= (12, 8) else 4)
             throw "Refusing to build with $reason -- the app would silently run on CPU. Install a CUDA torch (e.g. pip install torch --index-url https://download.pytorch.org/whl/cu130) or pass -AllowCpu."
         }
     } elseif ($torchStatus -ne 0) {
-        throw "Could not import torch with $Python (exit code $torchStatus)."
+        throw "Could not import torch with $BuildPython (exit code $torchStatus)."
     }
 
     # The version the app reports (/api/health, /api/system, the System panel). Generated, not
@@ -170,7 +188,7 @@ sys.exit(0 if (major, minor) >= (12, 8) else 4)
     $VersionFile = Join-Path $ProjectRoot "backend\_version.py"
     [System.IO.File]::WriteAllText($VersionFile, "__version__ = `"$Version`"`n", (New-Object System.Text.UTF8Encoding $false))
     try {
-        & $Python -m PyInstaller --noconfirm --distpath $Dist --workpath $Build PixelFlow.spec
+        & $BuildPython -m PyInstaller --noconfirm --distpath $Dist --workpath $Build PixelFlow.spec
         if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit code $LASTEXITCODE)." }
     } finally {
         Remove-Item $VersionFile -ErrorAction SilentlyContinue
@@ -277,6 +295,8 @@ json.dump({
     # debugging.
     $leftovers = @($LegacyPackage)
     if (-not $KeepBuildFiles) { $leftovers += @($Build, $Dist) }
+    # The build venv holds several GB of CUDA torch: drop it unless asked to keep it for a rebuild.
+    if (-not $KeepBuildFiles -and -not $ReuseVenv) { $leftovers += @($BuildVenv) }
     foreach ($leftover in $leftovers) {
         if (Test-Path $leftover) { Remove-Tree $leftover; Write-Host "Cleaned up $leftover" }
     }

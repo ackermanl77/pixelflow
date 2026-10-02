@@ -57,8 +57,8 @@ GPUs, and the build script refuses it.
 `requirements.txt` holds version *ranges*; `requirements-lock.txt` pins the
 exact versions (including every transitive dependency) the app was last
 tested with, and the release build installs with
-`-c requirements-lock.txt`. Regenerate it from the build venv after
-upgrading something and re-running the tests:
+`-c requirements-lock.txt`. Regenerate it from the dev `.venv` (where the
+tests run) after upgrading something and re-running the tests:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\make_lock.py
@@ -124,16 +124,16 @@ workflow imports it and passes its thumbprint to the script.
 This mirrors the sibling `photo_professional_tool` project's
 `build_release.ps1` exactly in approach:
 
-1. Picks the interpreter: `-Python <path>`, else `.venv\Scripts\python.exe`,
-   else `python` on `PATH` (no machine-specific paths). The next step
-   `pip install`s into that interpreter, so by default it changes your dev
-   `.venv` to match `requirements-lock.txt`. To keep `.venv` untouched,
-   build from a separate venv:
-   `python -m venv build-venv; .\scripts\build_release.ps1 -Version "x" -Python build-venv\Scripts\python.exe`
-   (that's how the 2026-10-01 verification build was made).
+1. Creates a fresh `build-venv\` (gitignored) from a base interpreter:
+   `-Python <path>`, else `py -3.14`, else `python` on `PATH` (no
+   machine-specific paths). Everything is installed into that venv and
+   PyInstaller runs from it, so the build never touches your dev `.venv` and
+   what ships depends only on the requirement files. The venv (several GB of
+   CUDA torch) is deleted after a successful build; `-ReuseVenv` keeps it and
+   reuses it next time for a faster rebuild.
 2. Installs torch from `-TorchIndexUrl` (default
-   `https://download.pytorch.org/whl/cu130`; pip keeps an already-installed
-   torch), then `requirements.txt` + `requirements-desktop.txt`, all
+   `https://download.pytorch.org/whl/cu130`), then `requirements.txt` +
+   `requirements-desktop.txt`, all
    constrained by `requirements-lock.txt` (the torch step too, so a newer
    torch on the index can't later be swapped for PyPI's CPU-only locked
    version).
