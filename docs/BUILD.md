@@ -65,9 +65,10 @@ tests run) after upgrading something and re-running the tests:
 ```
 
 torch is pinned without its `+cu130` suffix: the CUDA flavour comes from the
-index URL (`https://download.pytorch.org/whl/cu130`). `peft` (LoRA support)
-is listed in `requirements.txt` but wasn't installed in the venv the lock was
-made from, so it's unpinned until you install it and regenerate.
+index URL (`https://download.pytorch.org/whl/cu130`). Every package in
+`requirements.txt` is pinned, `peft` (LoRA support) included; a package the
+dev venv lacks is listed as unpinned in the lock's header, so install
+`requirements.txt` into `.venv` before regenerating.
 
 ## Quick build (no packaging extras)
 
