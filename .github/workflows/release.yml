@@ -14,17 +14,27 @@ on:
 permissions:
   contents: write
 
+env:
+  # Lets the signing step's `if:` see whether the secret exists (secrets can't be used in `if:`).
+  SIGNING_CERT_PFX: ${{ secrets.SIGNING_CERT_PFX }}
+
 jobs:
+  # The full test suite (Linux + Windows/3.14) must pass before anything is built.
+  test:
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # Same interpreter as local release builds and requirements-lock.txt.
+          python-version: "3.14"
           cache: "pip"
-          cache-dependency-path: requirements-desktop.txt
+          cache-dependency-path: requirements-lock.txt
 
       - name: Resolve version
         id: version
@@ -55,17 +65,58 @@ jobs:
       # since this runner has no sibling-project cache to reuse) WebView2 Fixed Version runtime,
       # then archive to .7z + write its .sha256 sidecar -- this workflow is deliberately just "run
       # the same script in CI" (see that script's own comments for why each piece exists).
+      #
+      # PyPI's Windows torch wheel is CPU-only, so the script first installs torch from the pinned
+      # CUDA index below and then refuses to build (before PyInstaller) unless torch.version.cuda is
+      # 12.8+ -- a release can't silently ship CPU torch. The runner has no GPU; the guard checks
+      # the torch build, not the hardware. Keep the index in sync with docs/BUILD.md.
+      # Code signing is optional: with a SIGNING_CERT_PFX (base64 .pfx) + SIGNING_CERT_PASSWORD
+      # secret, the certificate is imported and the exe signed (fewer SmartScreen warnings).
+      - name: Import signing certificate
+        id: cert
+        if: ${{ env.SIGNING_CERT_PFX != '' }}
+        shell: pwsh
+        env:
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_CERT_PFX))
+          $password = ConvertTo-SecureString $env:SIGNING_CERT_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+
       - name: Build release
         shell: pwsh
-        run: .\scripts\build_release.ps1 -Version "${{ steps.version.outputs.value }}"
+        env:
+          THUMBPRINT: ${{ steps.cert.outputs.thumbprint }}
+        run: |
+          $signArgs = @{}
+          if ($env:THUMBPRINT) { $signArgs = @{ Sign = $true; CertificateThumbprint = $env:THUMBPRINT } }
+          .\scripts\build_release.ps1 -Version "${{ steps.version.outputs.value }}" `
+            -Python (Get-Command python).Source `
+            -TorchIndexUrl "https://download.pytorch.org/whl/cu130" @signArgs
+
+      # Belt and braces: the bundled torch in the finished release\ folder must be a CUDA build.
+      - name: Verify bundled torch is a CUDA build
+        shell: pwsh
+        run: |
+          $info = Get-Content release\build-info.json -Raw | ConvertFrom-Json
+          Write-Host "Bundled torch $($info.torch), CUDA $($info.torch_cuda)"
+          if (-not $info.torch_cuda) { throw "release\ was built with a CPU-only torch" }
+          $versionPy = Get-ChildItem release -Recurse -Filter version.py | Where-Object { $_.DirectoryName -like "*\torch" } | Select-Object -First 1
+          if (-not $versionPy -or -not (Select-String -Path $versionPy.FullName -Pattern "^cuda\s*(:.*)?=\s*'\d")) {
+            throw "release\_internal\torch\version.py does not name a CUDA version"
+          }
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: PixelFlow-${{ steps.version.outputs.value }}-Windows
+          # A single .7z, or .7z.001, .002, ... split volumes when the CUDA build is over GitHub's
+          # 2 GiB per-asset limit (see build_release.ps1 -MaxAssetBytes), plus the .sha256 file.
           path: |
-            PixelFlow-*-Windows.7z
-            PixelFlow-*-Windows.7z.sha256
+            PixelFlow-*-Windows.7z*
           if-no-files-found: error
 
       - name: Publish GitHub Release
@@ -74,7 +125,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" `
-            PixelFlow-*-Windows.7z PixelFlow-*-Windows.7z.sha256 `
+          # PowerShell doesn't expand wildcards for native commands -- list the files explicitly.
+          $assets = (Get-ChildItem -Path "PixelFlow-*-Windows.7z*").FullName
+          if (-not $assets) { throw "no release archive found" }
+          gh release create "${{ github.ref_name }}" @assets `
             --title "PixelFlow ${{ github.ref_name }}" `
             --generate-notes

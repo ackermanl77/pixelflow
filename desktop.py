@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import os
+import socket
 import sys
 import threading
 import time
@@ -11,15 +13,21 @@ import requests
 import uvicorn
 import webview
 
-HOST = "127.0.0.1"
+from backend.config import APP_ID, HOST, port as configured_port
+
 # Not 8188: that's ComfyUI's default port, and people who run PixelFlow are
-# likely to have ComfyUI running too. Keep in sync with run.py.
-PORT = 8288
-URL = f"http://{HOST}:{PORT}"
-HEALTH_URL = f"{URL}/api/health"
-# What backend/main.py's /api/health reports as "app" -- anything else
-# answering on PORT is some other program.
-APP_ID = "pixelflow"
+# likely to have ComfyUI running too. PIXELFLOW_PORT overrides it.
+PORT = configured_port()
+
+logger = logging.getLogger(__name__)
+
+
+def _url(port: int) -> str:
+    return f"http://{HOST}:{port}"
+
+
+def _health_url(port: int) -> str:
+    return f"{_url(port)}/api/health"
 
 
 def _project_root() -> Path:
@@ -52,23 +60,31 @@ def _configure_webview2_runtime() -> None:
 
 
 def _server_log_path() -> Path:
-    base = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else _project_root()
-    return base / "server-error.log"
+    # Next to the other logs in the data folder (writable even when the exe
+    # is installed under Program Files - see backend/paths.py).
+    from backend.paths import LOG_DIR
+
+    return LOG_DIR / "server-error.log"
 
 
 _server_error: list[str] = []
+_server: dict = {}
 
 
-def _run_server() -> None:
+def _run_server(port: int = PORT) -> None:
     # A windowed (console=False) build has no stderr, so an exception on this background thread --
     # e.g. an import failing inside the frozen bundle -- used to vanish without a trace: the main
-    # thread just timed out with "server did not start". Keep the traceback, and write it next to
-    # the .exe so it can actually be diagnosed.
+    # thread just timed out with "server did not start". Keep the traceback, and write it to the
+    # log folder so it can actually be diagnosed.
     try:
         from backend.main import app
 
-        config = uvicorn.Config(app, host=HOST, port=PORT, log_level="warning")
+        # log_config=None: don't let uvicorn install its own stderr-only
+        # handlers (stderr is None in the windowed build); its loggers then
+        # propagate to the root logger, i.e. to logs/pixelflow.log.
+        config = uvicorn.Config(app, host=HOST, port=port, log_level="warning", log_config=None)
         server = uvicorn.Server(config)
+        _server["server"] = server
         # uvicorn only installs OS signal handlers on the main thread, so running its
         # server loop here (a background thread) is safe alongside pywebview's own loop.
         server.run()
@@ -76,25 +92,29 @@ def _run_server() -> None:
         detail = traceback.format_exc()
         if isinstance(exc, SystemExit):
             # uvicorn logs a failed bind and calls sys.exit(1) -- by far the most common cause.
-            detail = f"uvicorn exited (code {exc.code}); port {PORT} is most likely already in use.\n\n{detail}"
+            detail = f"uvicorn exited (code {exc.code}); port {port} is most likely already in use.\n\n{detail}"
         _server_error.append(detail)
+        logging.getLogger(__name__).error("embedded server failed: %s", detail)
         try:
-            _server_log_path().write_text(detail, encoding="utf-8")
+            path = _server_log_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(detail, encoding="utf-8")
         except OSError:
             pass
         raise
 
 
-def _wait_for_server(thread: threading.Thread, timeout_s: float = 120.0) -> None:
-    # Loading the CUDA build of torch + diffusers cold can take well over 30s on first launch, so
-    # the budget is generous -- but stop immediately if the server thread has already died.
+def _wait_for_server(thread: threading.Thread, timeout_s: float = 120.0, port: int = PORT) -> None:
+    # The server itself comes up in a second or two (torch is imported lazily, see
+    # backend/nodes/runtime.py), but the budget stays generous for slow first launches -- and
+    # stop immediately if the server thread has already died.
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if not thread.is_alive():
             reason = _server_error[-1] if _server_error else "the server thread exited unexpectedly"
             raise RuntimeError(f"The embedded PixelFlow server failed to start (see {_server_log_path()}):\n{reason}")
         try:
-            response = requests.get(HEALTH_URL, timeout=0.5)
+            response = requests.get(_health_url(port), timeout=0.5)
         except requests.RequestException:
             time.sleep(0.25)
             continue
@@ -117,14 +137,82 @@ def _is_pixelflow_health(response: requests.Response) -> bool:
     return isinstance(payload, dict) and payload.get("app") == APP_ID
 
 
+def _port_is_free(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((HOST, port))
+        except OSError:
+            return False
+    return True
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((HOST, 0))
+        return sock.getsockname()[1]
+
+
+def _pixelflow_already_running(port: int) -> bool:
+    try:
+        return _is_pixelflow_health(requests.get(_health_url(port), timeout=1.0))
+    except requests.RequestException:
+        return False
+
+
+def choose_port(preferred: int = PORT) -> tuple[int, bool]:
+    """(port, start_own_server). The preferred port when it's free; when
+    another PixelFlow already serves it, attach to that one (a second window
+    on the same server instead of a half-started second instance); when
+    some other app owns it, a free port picked by the OS. Everything in the
+    frontend uses relative URLs and the Origin check compares against the
+    Host header, so any port works."""
+    if _port_is_free(preferred):
+        return preferred, True
+    if _pixelflow_already_running(preferred):
+        return preferred, False
+    fallback = _free_port()
+    logger.warning("port %d is used by another program; using port %d instead", preferred, fallback)
+    return fallback, True
+
+
+def _shutdown(thread: threading.Thread | None, timeout_s: float = 10.0) -> None:
+    """Window closed: stop the running prompt at its next step, let uvicorn
+    finish (so a PNG being written isn't cut off), and wait for it."""
+    if thread is None:
+        return
+    try:
+        from backend.main import queue
+
+        queue.interrupt()
+    except Exception:  # noqa: BLE001 - best effort on the way out
+        pass
+    server = _server.get("server")
+    if server is not None:
+        server.should_exit = True
+    thread.join(timeout_s)
+
+
 def main() -> None:
-    thread = threading.Thread(target=_run_server, daemon=True)
-    thread.start()
-    _wait_for_server(thread)
+    # Before anything else, so even an import failure of the backend in the
+    # frozen app lands in logs/pixelflow.log (the build has no console).
+    from backend.logging_setup import setup_logging
+
+    setup_logging()
+    port, own_server = choose_port(PORT)
+    thread = None
+    if own_server:
+        thread = threading.Thread(target=_run_server, args=(port,), daemon=True)
+        thread.start()
+        _wait_for_server(thread, port=port)
+    else:
+        logger.info("PixelFlow is already running on port %d; opening another window on it", port)
 
     _configure_webview2_runtime()
-    webview.create_window("PixelFlow", URL, width=1440, height=960, min_size=(1024, 700))
-    webview.start(gui="edgechromium")
+    webview.create_window("PixelFlow", _url(port), width=1440, height=960, min_size=(1024, 700))
+    try:
+        webview.start(gui="edgechromium")
+    finally:
+        _shutdown(thread)
 
 
 if __name__ == "__main__":

@@ -1,9 +1,17 @@
 fastapi==0.115.*
 uvicorn[standard]==0.32.*
-pillow==11.*
+pillow>=11,<13
 python-multipart==0.0.*
-torch>=2.4
-diffusers>=0.31
-transformers>=4.46
-accelerate>=1.0
+# 2.7+: the first releases with RTX 50-series (sm_120) kernels. On Windows,
+# install the CUDA wheel from the PyTorch index first (docs/BUILD.md).
+torch>=2.7
+diffusers>=0.35,<0.41
+transformers>=4.46,<6
+accelerate>=1.0,<2
 safetensors>=0.4
+huggingface_hub>=0.30
+# LoRA support (Load LoRA node). Optional at runtime: without it, graphs
+# without LoRAs still work and a LoRA node reports a clear error.
+peft>=0.13
+# Exact, tested versions for release builds: requirements-lock.txt
+# (pip install -r requirements.txt -c requirements-lock.txt).

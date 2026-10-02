@@ -2,11 +2,22 @@
 param(
     [string]$Version = "0.1.0",
     [switch]$Sign,
-    [string]$CertificateSubject = "",
-    # Build with a specific interpreter instead of the default lookup below -- e.g. the project's
-    # own .venv, which has the CUDA build of torch. PyInstaller bundles whatever torch the
-    # interpreter running it has, so building from a CPU-only torch ships a CPU-only app.
+    # SHA-1 thumbprint of the code-signing certificate in the certificate store (signtool /sha1).
+    # (Was misleadingly called -CertificateSubject.)
+    [string]$CertificateThumbprint = "",
+    # Build with a specific interpreter instead of the default lookup below (.venv, then "python"
+    # on PATH). PyInstaller bundles whatever torch the interpreter running it has, so building from
+    # a CPU-only torch ships a CPU-only app -- see the CUDA guard below.
     [string]$Python = "",
+    # PyTorch wheel index torch is installed from before requirements.txt (PyPI's Windows torch
+    # wheel is CPU-only). cu130 matches the last shipped build (torch 2.14.0+cu130) and needs an
+    # NVIDIA driver >= 580; RTX 50-series (sm_120) needs CUDA 12.8 or newer either way. If torch is
+    # already installed, pip leaves it alone -- the guard below still checks what's there. Pass ""
+    # to skip this step (e.g. with -AllowCpu).
+    [string]$TorchIndexUrl = "https://download.pytorch.org/whl/cu130",
+    # Allow building with a CPU-only torch. Without it, the build stops before PyInstaller when
+    # torch has no CUDA support, instead of silently shipping an app that can't use the GPU.
+    [switch]$AllowCpu,
     # Skip the 7z archive. A CUDA build bundles several GB of libraries, and -mx=9 LZMA over that
     # takes a long time -- skip it when only the unpacked release\ folder is needed.
     [switch]$SkipArchive,
@@ -14,18 +25,22 @@ param(
     # deleting them. build-release\ is PyInstaller's analysis cache, so keeping it makes the next
     # rebuild faster at the cost of a few hundred MB; dist-release\ is empty either way, since its
     # output is moved into release\.
-    [switch]$KeepBuildFiles
+    [switch]$KeepBuildFiles,
+    # GitHub release assets are limited to 2 GiB each. A larger archive is re-made as 7z split
+    # volumes (PixelFlow-<version>-Windows.7z.001, .002, ...) of this size -- 7-Zip opens the .001.
+    [long]$MaxAssetBytes = 1900MB
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-if (-not $Python) { $Python = "C:\Users\MELEJ\AppData\Local\Python\pythoncore-3.14-64\python.exe" }
-if (-not (Test-Path $Python)) { $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe" }
-if (-not (Test-Path $Python)) {
-    # Falls back to whatever "python" resolves to on PATH (e.g. a CI runner set up via
-    # actions/setup-python) when neither dev-machine-specific path above exists.
-    $onPath = Get-Command python -ErrorAction SilentlyContinue
-    if ($onPath) { $Python = $onPath.Source }
+if (-not $Python) {
+    # The project's own .venv first, then whatever "python" resolves to on PATH (e.g. a CI runner
+    # set up via actions/setup-python). No machine-specific paths: pass -Python for anything else.
+    $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+    if (-not (Test-Path $Python)) {
+        $onPath = Get-Command python -ErrorAction SilentlyContinue
+        if ($onPath) { $Python = $onPath.Source }
+    }
 }
 $Dist = Join-Path $ProjectRoot "dist-release"
 $Build = Join-Path $ProjectRoot "build-release"
@@ -40,8 +55,8 @@ $LegacyPackage = Join-Path $ProjectRoot "PixelFlow-$Version-Windows"
 
 # Microsoft Edge WebView2 Runtime is required to open the app's window at all (pywebview's
 # edgechromium backend needs it). A pinned "Fixed Version" copy is bundled as a sibling
-# "WebView2Runtime" folder next to PixelFlow.exe, and desktop.py points pywebview at it via
-# webview.settings['WEBVIEW2_RUNTIME_PATH'] -- see the sibling photo_professional_tool project's
+# "WebView2Runtime" folder next to PixelFlow.exe, and desktop.py points the WebView2 loader at it via
+# the WEBVIEW2_BROWSER_EXECUTABLE_FOLDER environment variable -- see the sibling photo_professional_tool project's
 # scripts/build_release.ps1 for the original rationale (same runtime, reused here). Unlike the
 # normal Evergreen runtime, a bundled Fixed Version copy does NOT auto-update with Chromium
 # security patches, so $WebView2Version should be bumped deliberately every so often.
@@ -56,20 +71,77 @@ $WebView2RuntimeSource = Join-Path $WebView2ExtractedRoot "Microsoft.WebView2.Fi
 # version for its own build -- reuse its cache instead of re-downloading ~300MB when present.
 $SiblingCacheDir = Join-Path (Split-Path -Parent $ProjectRoot) "photo_professional_tool\vendor\webview2-cache"
 
+# Runs a Python snippet from a temp file rather than `python -c`: Windows PowerShell 5.1 mangles
+# double quotes inside native-command arguments. Returns the interpreter's exit code.
+function Invoke-PythonSnippet([string]$Code, [string[]]$Arguments = @()) {
+    $file = Join-Path ([System.IO.Path]::GetTempPath()) ("pixelflow-build-" + [guid]::NewGuid().ToString("N") + ".py")
+    [System.IO.File]::WriteAllText($file, $Code, (New-Object System.Text.UTF8Encoding $false))
+    try {
+        & $Python $file @Arguments | ForEach-Object { Write-Host $_ }
+        return $LASTEXITCODE
+    } finally {
+        Remove-Item $file -ErrorAction SilentlyContinue
+    }
+}
+
 if (-not (Test-Path $Python)) {
-    throw "Python interpreter not found. Install Python globally or create .venv."
+    throw "Python interpreter not found. Create .venv, put python on PATH, or pass -Python."
 }
 
 Push-Location $ProjectRoot
 try {
     # $ErrorActionPreference doesn't cover native commands -- check their exit codes explicitly, so a
     # failed install or build stops here instead of packaging (and cleaning up around) a stale output.
-    & $Python -m pip install -r requirements.txt
+    Write-Host "Building with $Python"
+    if ($TorchIndexUrl) {
+        # Must come before requirements.txt: once any torch satisfies "torch>=2.4", pip won't
+        # replace it, and on Windows the PyPI wheel it would otherwise pick is CPU-only.
+        & $Python -m pip install torch --index-url $TorchIndexUrl
+        if ($LASTEXITCODE -ne 0) { throw "pip install torch --index-url $TorchIndexUrl failed (exit code $LASTEXITCODE)." }
+    }
+    # requirements-lock.txt pins the exact versions the app was tested with (scripts/make_lock.py);
+    # as a constraints file it only fixes versions, it never adds packages.
+    $constraints = @()
+    if (Test-Path (Join-Path $ProjectRoot "requirements-lock.txt")) { $constraints = @("-c", "requirements-lock.txt") }
+    & $Python -m pip install -r requirements.txt @constraints
     if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements.txt failed (exit code $LASTEXITCODE)." }
-    & $Python -m pip install -r requirements-desktop.txt
+    & $Python -m pip install -r requirements-desktop.txt @constraints
     if ($LASTEXITCODE -ne 0) { throw "pip install -r requirements-desktop.txt failed (exit code $LASTEXITCODE)." }
-    & $Python -m PyInstaller --noconfirm --distpath $Dist --workpath $Build PixelFlow.spec
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit code $LASTEXITCODE)." }
+
+    # CUDA guard: PyInstaller bundles whatever torch this interpreter has. Exit code 3 = CPU-only
+    # build, 4 = CUDA older than 12.8 (no RTX 50-series / sm_120 kernels). Checks the build, not a
+    # GPU, so it also works on a GPU-less CI runner.
+    $torchCheck = @'
+import sys, torch
+cuda = torch.version.cuda
+print(f"torch {torch.__version__}, CUDA {cuda or 'none (CPU-only build)'}")
+if not cuda:
+    sys.exit(3)
+major, minor = (int(p) for p in cuda.split(".")[:2])
+sys.exit(0 if (major, minor) >= (12, 8) else 4)
+'@
+    $torchStatus = Invoke-PythonSnippet $torchCheck
+    if ($torchStatus -eq 3 -or $torchStatus -eq 4) {
+        $reason = if ($torchStatus -eq 3) { "a CPU-only torch" } else { "a torch built for CUDA older than 12.8 (no RTX 50-series support)" }
+        if ($AllowCpu) {
+            Write-Warning "Building with $reason (-AllowCpu): the packaged app will not use an RTX 50-series GPU."
+        } else {
+            throw "Refusing to build with $reason -- the app would silently run on CPU. Install a CUDA torch (e.g. pip install torch --index-url https://download.pytorch.org/whl/cu130) or pass -AllowCpu."
+        }
+    } elseif ($torchStatus -ne 0) {
+        throw "Could not import torch with $Python (exit code $torchStatus)."
+    }
+
+    # The version the app reports (/api/health, /api/system, the System panel). Generated, not
+    # committed (.gitignore); removed again after the build so a dev checkout reports "dev".
+    $VersionFile = Join-Path $ProjectRoot "backend\_version.py"
+    [System.IO.File]::WriteAllText($VersionFile, "__version__ = `"$Version`"`n", (New-Object System.Text.UTF8Encoding $false))
+    try {
+        & $Python -m PyInstaller --noconfirm --distpath $Dist --workpath $Build PixelFlow.spec
+        if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit code $LASTEXITCODE)." }
+    } finally {
+        Remove-Item $VersionFile -ErrorAction SilentlyContinue
+    }
 
     # Move (not copy) PyInstaller's output into release\: on the same drive that's a rename, so the
     # multi-GB build is never duplicated on disk, not even briefly.
@@ -105,12 +177,34 @@ try {
     }
     Copy-Item $WebView2RuntimeSource (Join-Path $ReleaseFolder "WebView2Runtime") -Recurse
 
+    # Record what was actually bundled, so a shipped build can be identified after the fact.
+    $buildInfoScript = @'
+import json, platform, sys, datetime
+import torch, diffusers, transformers
+json.dump({
+    "version": sys.argv[1],
+    "git_sha": sys.argv[2],
+    "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    "python": platform.python_version(),
+    "torch": torch.__version__,
+    "torch_cuda": torch.version.cuda,
+    "diffusers": diffusers.__version__,
+    "transformers": transformers.__version__,
+}, open(sys.argv[3], "w", encoding="utf-8"), indent=2)
+'@
+    $gitSha = (& git rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or -not $gitSha) { $gitSha = "unknown" }
+    $buildInfoStatus = Invoke-PythonSnippet $buildInfoScript @($Version, $gitSha, (Join-Path $ReleaseFolder "build-info.json"))
+    if ($buildInfoStatus -ne 0) { throw "Writing build-info.json failed (exit code $LASTEXITCODE)." }
+    Get-Content (Join-Path $ReleaseFolder "build-info.json") | Write-Host
+
     if ($Sign) {
-        if ([string]::IsNullOrWhiteSpace($CertificateSubject)) {
-            throw "-CertificateSubject is required when -Sign is used."
+        if ([string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+            throw "-CertificateThumbprint is required when -Sign is used."
         }
         $exe = Join-Path $ReleaseFolder "PixelFlow.exe"
-        & signtool sign /sha1 $CertificateSubject /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /a $exe
+        & signtool sign /sha1 $CertificateThumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $exe
+        if ($LASTEXITCODE -ne 0) { throw "signtool failed (exit code $LASTEXITCODE) -- the release is not signed." }
     }
 
     $hashPath = "$Archive.sha256"
@@ -118,16 +212,27 @@ try {
     if ($SkipArchive) {
         # An archive left over from an earlier build no longer matches release\ -- remove it rather
         # than leave a stale copy that looks like this build's.
-        foreach ($stale in @($Archive, $hashPath)) {
-            if (Test-Path $stale) { Remove-Item $stale -Force; Write-Host "Removed stale $stale" }
+        foreach ($stale in @(Get-ChildItem -Path "$Archive*" -ErrorAction SilentlyContinue)) {
+            Remove-Item $stale.FullName -Force; Write-Host "Removed stale $($stale.FullName)"
         }
         Write-Host "Skipping 7z archive (-SkipArchive)."
     } elseif ($sevenZip) {
-        if (Test-Path $Archive) { Remove-Item $Archive -Force }
+        foreach ($stale in @(Get-ChildItem -Path "$Archive*" -ErrorAction SilentlyContinue)) { Remove-Item $stale.FullName -Force }
         & $sevenZip.Source a -t7z -mx=9 -m0=lzma2 -ms=on $Archive (Join-Path $ReleaseFolder "*")
         if ($LASTEXITCODE -ne 0) { throw "7z failed (exit code $LASTEXITCODE)." }
-        (Get-FileHash $Archive -Algorithm SHA256).Hash | Set-Content $hashPath
-        Write-Host "Release archive: $Archive"
+        if ((Get-Item $Archive).Length -gt $MaxAssetBytes) {
+            # Too big for one GitHub release asset (2 GiB limit): split volumes instead.
+            Remove-Item $Archive -Force
+            $volumeSize = "{0}m" -f [math]::Floor($MaxAssetBytes / 1MB)
+            & $sevenZip.Source a -t7z -mx=9 -m0=lzma2 -ms=on "-v$volumeSize" $Archive (Join-Path $ReleaseFolder "*")
+            if ($LASTEXITCODE -ne 0) { throw "7z (split volumes) failed (exit code $LASTEXITCODE)." }
+            Write-Host "Archive is larger than $MaxAssetBytes bytes: split into $volumeSize volumes."
+        }
+        # One "<hash>  <file>" line per archive file (a single .7z, or every .7z.NNN volume).
+        Get-ChildItem -Path "$Archive*" | Where-Object { $_.Name -notlike "*.sha256" } | Sort-Object Name | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash, $_.Name
+        } | Set-Content $hashPath
+        Write-Host "Release archive: $Archive (see $hashPath for every file)"
         Write-Host "SHA-256 file: $hashPath"
     } else {
         Write-Warning "7z was not found. The unpacked build is ready at $ReleaseFolder."

@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import importlib.util
+
 from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
 
 datas = [("frontend", "frontend")]
@@ -7,11 +9,29 @@ binaries = []
 hiddenimports = ["backend.main"]
 hiddenimports += collect_submodules("backend")
 
-for package in ["uvicorn", "pywebview", "torch", "diffusers", "transformers", "accelerate", "safetensors"]:
+# "webview" is pywebview's import name (collect_all("pywebview") collected nothing). peft (LoRA
+# support) is optional: bundled when installed in the build interpreter.
+packages = ["uvicorn", "webview", "torch", "diffusers", "transformers", "accelerate", "safetensors"]
+if importlib.util.find_spec("peft") is not None:
+    packages.append("peft")
+for package in packages:
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hiddenimports
+
+
+def _needed_at_runtime(src, dest):
+    """torch's C++ headers (torch/include, ~38 MB) and .lib import libraries (~44 MB) are only
+    needed to compile extensions, never by the running app."""
+    folder = dest.replace("\\", "/").lower().rstrip("/") + "/"
+    if folder.startswith("torch/include/"):
+        return False
+    return not (folder.startswith("torch/lib/") and src.lower().endswith(".lib"))
+
+
+datas = [entry for entry in datas if _needed_at_runtime(entry[0], entry[1])]
+binaries = [entry for entry in binaries if _needed_at_runtime(entry[0], entry[1])]
 
 # diffusers and transformers verify their dependencies' installed versions at import time via
 # importlib.metadata (see their dependency_versions_check.py). PyInstaller doesn't bundle
@@ -33,7 +53,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=["torch.utils.tensorboard", "tkinter"],
     noarchive=False,
 )
 
