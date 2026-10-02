@@ -28,9 +28,36 @@ This doc covers building #3.
 ## One-time setup
 
 ```powershell
-pip install -r requirements.txt
-pip install -r requirements-desktop.txt
+python -m venv .venv
+.\.venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
+.\.venv\Scripts\python -m pip install -r requirements.txt -r requirements-desktop.txt
 ```
+
+**Install torch from the CUDA index first.** On Windows, PyPI's `torch`
+wheel is CPU-only, and once *any* torch satisfies `requirements.txt`'s
+`torch>=2.7`, pip won't replace it. PyInstaller bundles whatever torch the
+building interpreter has, so a CPU torch means a CPU-only app. The pinned
+index is **cu130** (what the last shipped build used, `torch 2.14.0+cu130`;
+needs an NVIDIA driver 580 or newer). **cu128** also works (driver 570+);
+anything older than CUDA 12.8 has no kernels for RTX 50-series (sm_120)
+GPUs, and the build script refuses it.
+
+### Locked versions
+
+`requirements.txt` holds version *ranges*; `requirements-lock.txt` pins the
+exact versions (including every transitive dependency) the app was last
+tested with, and the release build installs with
+`-c requirements-lock.txt`. Regenerate it from the build venv after
+upgrading something and re-running the tests:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\make_lock.py
+```
+
+torch is pinned without its `+cu130` suffix: the CUDA flavour comes from the
+index URL (`https://download.pytorch.org/whl/cu130`). `peft` (LoRA support)
+is listed in `requirements.txt` but wasn't installed in the venv the lock was
+made from, so it's unpinned until you install it and regenerate.
 
 ## Quick build (no packaging extras)
 
@@ -61,7 +88,22 @@ This is triggered by a tag or a manual run, not by every push to `main` — a
 routine commit doesn't kick off a multi-minute Windows CI build on its own.
 The CI runner has no `photo_professional_tool` checkout next to it, so it
 always downloads the WebView2 Runtime fresh instead of reusing that cache
-(see below).
+(see below). The workflow passes `-Python` and `-TorchIndexUrl
+https://download.pytorch.org/whl/cu130` explicitly (keep that in sync with
+the script's default), and after the build a separate step fails the run
+unless `release\build-info.json` and the bundled `torch\version.py` both
+name a CUDA version. The release job only runs after the full test suite
+(`ci.yml`, called as a reusable workflow) passes on Linux and on
+Windows/Python 3.14. A CUDA build is several GB: when the `.7z` is larger
+than `-MaxAssetBytes` (1900 MB, under GitHub's 2 GiB per-asset limit) the
+script re-creates it as split volumes `PixelFlow-<version>-Windows.7z.001`,
+`.002`, … and the `.sha256` file lists every volume. To unpack, download all
+volumes into one folder and open the `.001` with 7-Zip (or
+`7z x PixelFlow-<version>-Windows.7z.001`).
+
+**Code signing in CI** is optional: add a base64-encoded `.pfx` as the
+`SIGNING_CERT_PFX` secret and its password as `SIGNING_CERT_PASSWORD`; the
+workflow imports it and passes its thumbprint to the script.
 
 ## Full release build (local)
 
@@ -72,24 +114,41 @@ always downloads the WebView2 Runtime fresh instead of reusing that cache
 This mirrors the sibling `photo_professional_tool` project's
 `build_release.ps1` exactly in approach:
 
-1. Installs `requirements.txt` + `requirements-desktop.txt`.
-2. Runs PyInstaller against `PixelFlow.spec`.
-3. Moves (not copies) the built exe folder to `release\` — the only
+1. Picks the interpreter: `-Python <path>`, else `.venv\Scripts\python.exe`,
+   else `python` on `PATH` (no machine-specific paths).
+2. Installs torch from `-TorchIndexUrl` (default
+   `https://download.pytorch.org/whl/cu130`; pip keeps an already-installed
+   torch), then `requirements.txt` + `requirements-desktop.txt`, constrained
+   by `requirements-lock.txt`.
+3. **CUDA guard:** prints `torch.__version__`/`torch.version.cuda` and stops
+   before PyInstaller if torch is a CPU-only build or older than CUDA 12.8.
+   `-AllowCpu` turns that into a warning (for a deliberate CPU build). It
+   checks the torch build, not a GPU, so it works on a GPU-less CI runner.
+4. Writes `backend\_version.py` (`-Version`; the app shows it in
+   `/api/health` and the System panel, "dev" from source), runs PyInstaller
+   against `PixelFlow.spec` (which collects `webview`, drops torch's C++
+   headers and `.lib` files, ~80 MB, and excludes tensorboard/tkinter), and
+   removes `_version.py` again.
+5. Moves (not copies) the built exe folder to `release\` — the only
    unpacked copy, so a multi-GB CUDA build is never duplicated on disk.
-4. Downloads (or reuses) a pinned "Fixed Version" copy of the Microsoft Edge
+6. Downloads (or reuses) a pinned "Fixed Version" copy of the Microsoft Edge
    WebView2 Runtime and bundles it as a sibling `WebView2Runtime\` folder next
    to `PixelFlow.exe` — **the packaged app doesn't depend on the target
-   machine having WebView2 installed at all.**
-5. Optionally code-signs the exe (`-Sign -CertificateSubject "..."`).
-6. Compresses `release\` to `PixelFlow-<version>-Windows.7z` + `.sha256` if
-   `7z` is on `PATH` (otherwise just warns). `-SkipArchive` skips this and
-   removes a stale archive from an earlier build.
-7. Deletes `build-release\` and `dist-release\` after a successful build
+   machine having WebView2 installed at all.** Then writes
+   `release\build-info.json` (version, git SHA, build time, Python, torch,
+   torch CUDA, diffusers, transformers) so a shipped build can be identified.
+7. Optionally code-signs the exe (`-Sign -CertificateThumbprint <sha1>`); a
+   failing `signtool` stops the build.
+8. Compresses `release\` to `PixelFlow-<version>-Windows.7z` + `.sha256` if
+   `7z` is on `PATH` (otherwise just warns), split into volumes when it's
+   over `-MaxAssetBytes`. `-SkipArchive` skips this and removes a stale
+   archive from an earlier build.
+9. Deletes `build-release\` and `dist-release\` after a successful build
    (`-KeepBuildFiles` keeps PyInstaller's cache for a faster rebuild; a failed
    build always keeps them for debugging).
-7. Mirrors the result to a fixed-name `release\` folder, so
-   `release\PixelFlow.exe` is always where the latest build landed — no need
-   to know the version number to find it.
+The result always lands in the fixed-name `release\` folder, so
+`release\PixelFlow.exe` is where the latest build is — no need to know the
+version number to find it.
 
 **Why bundle WebView2 at all?** pywebview's Windows backend (`edgechromium`)
 needs the WebView2 Runtime to open a window at all. The sibling
@@ -123,10 +182,24 @@ between runs:
 
 - **Bundled/read-only** (`frontend/`) — comes from `sys._MEIPASS` when
   frozen, or the repo's `frontend/` folder in dev.
-- **User data/writable** (`outputs/`, `uploads/`, `workflows/`) — created
-  next to the actual `.exe` (`Path(sys.executable).parent`) when frozen, so a
-  saved workflow or a generated image survives after the app closes and
-  reopens, instead of vanishing with the temp extraction dir.
+- **User data/writable** (`outputs/`, `uploads/`, `workflows/`, `models/`,
+  `logs/`, …) — `%LOCALAPPDATA%\PixelFlow` when frozen (so an install under
+  `C:\Program Files` works), or next to `PixelFlow.exe` when a
+  `portable.txt` file is there (or an older version's data already is);
+  `PIXELFLOW_HOME` overrides both, and `PIXELFLOW_MODELS_DIR` /
+  `settings.json`'s `models_dir` move the models. See
+  [PROJECT_STATUS.md](PROJECT_STATUS.md#where-data-lives-backendpathspy).
+
+## GPU checks before a release
+
+Tests marked `gpu` (`tests/test_gpu.py`) need a CUDA device: they're skipped
+in CI and on CPU-only machines. Run them on the RTX 5080 before a release:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -m gpu
+$env:PIXELFLOW_GPU_SMOKE = "1"   # also sample a real 512x512 image with sd-turbo (~2.5 GB download)
+.\.venv\Scripts\python.exe -m pytest -q -m gpu
+```
 
 ## Offline operation
 
@@ -144,9 +217,15 @@ release\PixelFlow.exe
 
 A native "PixelFlow" window should open. If it doesn't:
 
-- Check for a Python traceback — the packaged app runs with `console=False`
-  in `PixelFlow.spec`, so set it to `True` temporarily to see console output
-  while debugging a broken build.
+- Check `logs\pixelflow.log` in the data folder (System panel → Open log
+  folder; `%LOCALAPPDATA%\PixelFlow\logs` by default; rotating, 5 MB × 3):
+  the packaged app runs with `console=False`, so everything — startup
+  errors, failing nodes' tracebacks, and a startup line naming the torch
+  version, CUDA version and device — is logged there.
+  `logs\server-error.log` records a server that failed to start at all.
+- If the startup line says `CUDA none - CPU-only build`, the build used a
+  CPU torch (only possible with `-AllowCpu`); `release\build-info.json`
+  says the same.
 - Confirm `release\WebView2Runtime\msedgewebview2.exe` exists — if the
   bundling step silently failed, pywebview falls back to any
   system-installed WebView2, which may not exist on the target machine.

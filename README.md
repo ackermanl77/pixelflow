@@ -18,20 +18,30 @@ ComfyUI's own frontend uses) for wiring nodes together and running them.
   real Stable Diffusion inference via `diffusers`/`torch`. Uses a CUDA GPU
   automatically if available; otherwise falls back to CPU, which works but
   is slow for anything beyond a distilled few-step model — see
-  `docs/PROJECT_STATUS.md` for details and current limitations (CPU speed,
-  first-run download, txt2img-only).
+  `docs/PROJECT_STATUS.md` for details and current limitations. SD 1.x/2.x,
+  SDXL, SD3 and Flux checkpoints are detected automatically; txt2img,
+  img2img, inpainting, LoRAs, prompt weighting and karras/trailing
+  schedules are supported, with live previews while sampling.
+- Only the nodes an output (Save/Preview Image) needs are run, and unchanged
+  nodes are reused from the previous run — re-queueing after a Blur tweak
+  doesn't re-sample a fixed-seed image.
+- The graph auto-saves in the browser; the queue, gallery and history
+  survive reloads and restarts (`history.jsonl`). Logs go to
+  `logs\pixelflow.log` (System panel → Open log folder).
+- The server starts in well under a second: torch and diffusers are
+  imported in the background.
 
 ## Install
 
 ```powershell
+pip install torch --index-url https://download.pytorch.org/whl/cu130   # NVIDIA GPU (RTX 50-series needs cu128+)
 pip install -r requirements.txt
 ```
 
-This pulls in `torch`, which is a large download (the CPU wheel is a few
-hundred MB). `requirements.txt` installs the default CPU build; if you have
-an NVIDIA GPU and want CUDA acceleration, install a CUDA-enabled `torch`
-build first (see https://pytorch.org/get-started/locally/ for the right
-`--index-url` for your CUDA version) before installing the rest.
+`requirements.txt` holds version ranges; `requirements-lock.txt` has the
+exact tested versions (`pip install -r requirements.txt -c
+requirements-lock.txt`). On Windows, PyPI's own `torch` wheel is CPU-only,
+so install the CUDA build first as above (or skip that line for CPU).
 
 ## Run (dev web app)
 
@@ -59,36 +69,46 @@ run.
 .\scripts\build_release.ps1 -Version "0.1.0"
 ```
 
-The release script installs dependencies, runs PyInstaller, and bundles the
+The release script installs a **CUDA** build of torch (from the PyTorch
+cu130 index), refuses to build if the interpreter's torch has no CUDA
+(`torch.version.cuda`; pass `-AllowCpu` to override), writes
+`release\build-info.json`, runs PyInstaller, and bundles the
 Microsoft Edge WebView2 Runtime as a sibling `WebView2Runtime\` folder next to
 `PixelFlow.exe` so the packaged app doesn't depend on the target machine
 having WebView2 installed — see `docs/BUILD.md` for the full walkthrough,
 including how it reuses the sibling `photo_professional_tool` project's
 already-downloaded copy of that runtime instead of re-fetching ~300MB.
 
-Generated images, uploads, and saved workflows live in `outputs\`,
-`uploads\`, and `workflows\` next to wherever the app is running from (the
-project root in dev, next to `PixelFlow.exe` when packaged) — see
-`docs/PROJECT_STATUS.md`'s note on `backend/paths.py` for why those two
-locations differ.
+Generated images, uploads, saved workflows, models and logs live in the
+project folder when running from source, and in `%LOCALAPPDATA%\PixelFlow`
+for the packaged app (next to `PixelFlow.exe` with a `portable.txt` file
+there). `PIXELFLOW_HOME` and `PIXELFLOW_MODELS_DIR` override them — see
+`docs/PROJECT_STATUS.md`.
 
 **Or let CI build it for you**: pushing a tag like `v0.1.0` triggers
 `.github/workflows/release.yml`, which runs this exact same script on a
-`windows-latest` runner and attaches `PixelFlow-<version>-Windows.7z` + its
-`.sha256` to a new GitHub Release, plus keeps them as a build artifact on the
+`windows-latest` runner after the full test suite passes, and attaches
+`PixelFlow-<version>-Windows.7z` (split into `.7z.001`, `.002`, … when it's
+over GitHub's 2 GiB asset limit) + its `.sha256` to a new GitHub Release, plus keeps them as a build artifact on the
 workflow run either way. It can also be run on demand (Actions tab →
 "Release Build" → "Run workflow", enter a version) without needing a tag
 push or a real release at all, which just builds and uploads the artifact.
 
 ## Nodes included
 
-- **loaders**: Load Checkpoint (real `diffusers` Stable Diffusion loading),
-  Load Image
-- **conditioning**: CLIP Text Encode
-- **sampling**: KSampler — real diffusion sampling (GPU if available, else CPU)
+- **loaders**: Load Checkpoint (installed-model dropdown or any Hub id;
+  SD 1.x/2.x, SDXL, SD3, Flux; precision option), Load LoRA, Load Image
+  (upload button, drag-and-drop or paste; outputs the image and its alpha
+  as a MASK), Load Mask
+- **conditioning**: CLIP Text Encode (`(word:1.2)` weighting, long prompts,
+  clip skip)
+- **sampling**: KSampler (txt2img), KSampler (Image) (img2img / hires fix),
+  KSampler (Inpaint) — real diffusion sampling (GPU if available, else CPU),
+  per-image seeds in a batch, normal/karras/trailing schedules
 - **image**: Empty Image, Resize, Blur, Brightness/Contrast, Hue/Saturation,
   Blend, Text Overlay — real, CPU-only, Pillow-based operations
-- **output**: Preview Image, Save Image
+- **output**: Preview Image (throwaway, `temp\`), Save Image (numbered
+  `prefix_00001_.png`, subfolders, `%date%`/`%seed%` tokens)
 
 Adding a new node is a single Python class — see `docs/NODE_AUTHORING.md`.
 
@@ -103,8 +123,14 @@ python -m pytest -q
 into `release/_internal/` and the venv). Tests write only to per-test temp
 folders, never the real `outputs/`/`uploads/`. The real-pipeline tests use
 the tiny `hf-internal-testing/tiny-stable-diffusion-torch` checkpoint and
-skip themselves if the Hugging Face Hub is unreachable.
-`.github/workflows/ci.yml` runs the suite on every push/PR with CPU `torch`.
+skip themselves if the Hugging Face Hub is unreachable (unless
+`PIXELFLOW_REQUIRE_HUB=1`, which CI sets). Tests marked `gpu` need CUDA
+(`python -m pytest -q -m gpu`; see `docs/BUILD.md`).
+`.github/workflows/ci.yml` runs the suite on every push/PR on Linux/Python
+3.12 and Windows/Python 3.14 with CPU `torch`, listing skips (`-rs`).
+`tests/test_frontend_logic.py` also runs the frontend's unit tests
+(`node --test tests/js/*.test.js`), `node --check`, and a check that every
+element `app.js` looks up exists in `index.html`.
 
 ## Security
 

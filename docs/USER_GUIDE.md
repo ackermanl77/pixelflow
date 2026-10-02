@@ -20,205 +20,280 @@ have one, CPU otherwise (slower, but it works).
   browser.
 - **Desktop app**: double-click `release\PixelFlow.exe` (or run
   `python desktop.py` from source) — same app, opened in its own window
-  instead of a browser tab.
+  instead of a browser tab. If port 8288 is taken by another program, the
+  desktop app picks a free port; if PixelFlow is already running, a second
+  launch opens another window on the running one.
 
 Either way, you get the same interface described below.
 
 ## The interface
 
 ```
-┌─────────────────────────────── Topbar ───────────────────────────────┐
-│ PixelFlow  [Queue Prompt] [Load Example] [Clear] [Undo][Redo][Fit View]│
-│            [Save Workflow] [Load workflow ▾] [Export JSON][Import JSON]│
-├───────────┬─────────────────────────────────────┬─────────────────────┤
-│  Node     │                                     │  Queue              │
-│  Library  │           Canvas                    │  Output Gallery     │
-│ (sidebar) │      (your node graph)               │  (right panel)      │
-└───────────┴─────────────────────────────────────┴─────────────────────┘
+┌──────────────────────────────────── Topbar ─────────────────────────────────────┐
+│ PixelFlow ● [Queue Prompt]×[1] │ [Workflows…][Save][Load Example][Clear]        │
+│            [Export JSON][Import…] │ [Undo][Redo][Fit View][?]   GPU · VRAM used  │
+├───────────┬───────────────────────────────────────┬─────────────────────────────┤
+│  Node     │                                       │  Queue  [Cancel all][Clear] │
+│  Library  │            Canvas                     │  Output Gallery             │
+│ (sidebar) │       (your node graph)               │  (right panel)              │
+└───────────┴───────────────────────────────────────┴─────────────────────────────┘
 ```
 
-- **Node Library** (left) — every available node, grouped by category.
-  Click one to drop it onto the canvas.
-- **Canvas** (center) — where you build your graph: drag nodes around,
-  drag from an output dot to an input dot to connect them.
-- **Queue** (top right) — live status of everything you've run this
-  session: queued, running (with the node currently executing), done, or
-  errored.
-- **Output Gallery** (bottom right) — every image a run has produced,
-  newest first.
+- **Node Library** (left) — every available node, grouped by category, with
+  a search box. Click one to drop it in the middle of the view, or drag it
+  onto the canvas where you want it. Hover for a one-line description.
+- **Canvas** (center) — where you build your graph.
+- **Queue** (top right) — your runs (restored after a reload or restart):
+  queued (with its position), running (with the node and elapsed time),
+  done (with the seed and how long it took), interrupted or errored.
+- **Output Gallery** (bottom right) — every image your runs produced, newest
+  first, grouped by run. Dashed borders mark previews (not saved).
+- **System** (top-right corner) — your GPU and its memory use; click it for
+  details.
 
 ## Building a graph
 
-1. **Add a node** — click a node in the sidebar (it appears centered in
-   your current view), or right-click empty canvas space for litegraph's
-   own "Add Node" menu, browsable by the same categories.
+1. **Add a node** — click or drag a node from the sidebar, or right-click
+   empty canvas space for litegraph's own "Add Node" menu.
 2. **Move it** — drag a node by its title bar.
-3. **Set its values** — each node shows its own widgets: number sliders,
-   text boxes, dropdowns, or a color field, depending on what that node
-   needs.
-4. **Connect nodes** — some inputs (an image, a model, a conditioning
-   value) show as a small colored dot on the node's left edge instead of a
-   widget. Drag from an output dot (right edge of the upstream node) to an
-   input dot (left edge of the downstream node) to wire them together. A
-   node with unconnected required inputs will fail when you run it.
+3. **Set its values** — each node shows its own widgets: numbers, text
+   boxes, dropdowns and on/off toggles.
+4. **Connect nodes** — inputs like an image, a model or a conditioning show
+   as dots on a node's left edge. Drag from an output dot (right edge of the
+   upstream node) to an input dot. Wires are coloured by type (image blue,
+   model purple, conditioning orange, mask green). Only nodes that lead to a
+   Save Image or Preview Image run, so a half-built side branch doesn't
+   block a run.
 5. **Delete a node** — click it, then press <kbd>Delete</kbd>.
-
-A blank canvas shows a reminder of steps 1 and 2 until you've added at
-least one node.
+6. **Mute or bypass** — right-click a node (or select nodes and press
+   <kbd>Ctrl+M</kbd> / <kbd>Ctrl+B</kbd>). A *muted* node (dark) is left out
+   of the run, and so is anything that only it feeds. A *bypassed* node
+   (purple) is skipped but its input is passed straight through to whatever
+   it was feeding (e.g. bypass a Blur to compare with and without it).
 
 ## Running a graph
 
-Click **Queue Prompt**. This sends your current graph to the backend, which
-runs it node by node. Watch the **Queue** panel on the right:
+Click **Queue Prompt** (or press <kbd>Ctrl+Enter</kbd>). The number next to
+it queues that many runs at once. <kbd>Ctrl+Shift+Enter</kbd> (or
+Shift-click) puts a run in front of everything already waiting.
 
-- *Queued* — waiting for the backend's single worker to pick it up (if
-  you've queued more than one thing).
-- *Running — \<Node Name\>* — which specific node is executing right now.
-  That node's title bar also highlights on the canvas itself while it runs.
-- *Done* — finished. Any image a **Save Image** or **Preview Image** node
-  produced appears in the **Output Gallery** below.
-- *Error* — something failed; the message names what went wrong (usually a
-  missing/unconnected input, or a bad value like a file that doesn't
-  exist).
-
-Nothing runs in parallel — prompts you queue while one is still running
-wait their turn. Each queued or running entry has a **Cancel** button: on a
-queued prompt it removes it from the queue; on the running one it stops it
-at the next node or sampling step (shown as *Interrupted*). A finished
-KSampler run shows the seed it used (e.g. *Done: … (seed 123456)*) — type
-that into `seed` to reproduce the image. Saved PNGs also embed the graph and
-seed as metadata.
+- The **progress area** at the bottom of the canvas shows the overall
+  progress (node *n* of *m*), the current node's steps, the speed (it/s) and
+  the time left. While a sampler runs you see a rough live preview of the
+  image, both there and on the sampler node itself; the running node has a
+  blue outline.
+- When a run finishes, each Save/Preview Image node shows its newest image
+  inside the node, and the images appear in the gallery.
+- **Cancel** on a queued row removes it; on the running row it stops that
+  run at the next step (it never stops a different run that started in the
+  meantime). **Cancel all** cancels everything that hasn't started;
+  **Clear finished** removes finished rows (images stay on disk).
 
 If the graph has a problem (an unconnected required input, a wire between
-incompatible sockets, an out-of-range number), **Queue Prompt** refuses it
-straight away with a message naming the node.
+incompatible sockets, an out-of-range number, a colour that isn't one, an
+upload that's gone, or no Save/Preview Image node at all), **Queue Prompt**
+refuses it straight away: the offending node gets a red outline with the
+message under it (a red dot marks the input, when it's a socket), and a
+pop-up in the bottom-right repeats it. A node that fails while running is
+marked the same way.
+
+### Seeds
+
+Every sampler has a `seed` and a **control after generate** setting:
+
+- **randomize** (default) — a new random seed after each queue;
+- **increment** — seed + 1 after each queue;
+- **fixed** — keep the seed.
+
+A seed of -1 is replaced by a concrete random seed when you queue (and
+shown in the widget), so every run can be reproduced. In a batch, image *i*
+uses seed + *i*; the PNG of each image stores its own seed, so you can
+re-create any single image of a batch.
 
 ## The node library, category by category
 
 ### loaders
 
-- **Load Checkpoint** — a `ckpt_name` text field, outputs a `MODEL`. Loads a
-  real Stable Diffusion pipeline; see [Generating images](#generating-images)
-  for what to put in `ckpt_name`.
-- **Load Image** — a `filename` text field, outputs an `IMAGE`. There's no
-  upload button in the UI yet: type the exact filename of an image file you
-  've placed directly in the project's `uploads\` folder (next to
-  `PixelFlow.exe` when packaged, or the project root in dev).
+- **Load Checkpoint** — `ckpt_name` lists the models in
+  `models\checkpoints\` (single `.safetensors`/`.ckpt` files and diffusers
+  folders) and the diffusers models already in your Hugging Face cache; pick
+  **Other (type a Hugging Face Hub id)…** to type any Hub repo id. `dtype`
+  sets the precision (see [Generating images](#generating-images)).
+  Outputs a `MODEL`.
+- **Load LoRA** — adds a LoRA from `models\loras\` to a `MODEL` at a
+  `strength` (-5 to 5). Chain several for several LoRAs. Needs the `peft`
+  package (included in `requirements.txt`).
+- **Load Image** — pick an uploaded image from the `filename` dropdown, or
+  click **Upload image…** to add one; a thumbnail shows the chosen file.
+  You can also drag an image file onto the canvas, or paste one with
+  <kbd>Ctrl+V</kbd>, to upload it and get a Load Image node for it. Outputs
+  the `IMAGE` and a `MASK` made from its transparency (transparent areas
+  are the ones inpainting repaints). Phone photos are rotated upright.
+- **Load Mask** — a grayscale upload as a `MASK` (white = repaint), or its
+  alpha channel; `invert` flips it.
 
 ### conditioning
 
 - **CLIP Text Encode** — a multiline `text` box (your prompt), outputs
-  `CONDITIONING`.
+  `CONDITIONING`. Weighting works like in A1111/ComfyUI: `(word)` ×1.1,
+  `((word))` ×1.21, `[word]` ÷1.1, `(word:1.4)` exactly ×1.4, and `\(` for a
+  literal bracket. Long prompts (over 75 tokens) are no longer cut off.
+  `clip_skip` 1 equals "clip skip 2" elsewhere. (Weighting, long prompts and
+  clip skip apply to SD 1.x/2.x checkpoints; for SDXL/SD3/Flux the weighting
+  syntax is removed and the plain text is used.)
 
 ### sampling
 
-- **KSampler** — takes a `MODEL`, `CONDITIONING`, and an `IMAGE` to use as
-  the output canvas size, plus `seed`/`steps`/`cfg` number fields. Outputs a
-  real generated `IMAGE` — see [Generating images](#generating-images).
+- **KSampler** — takes a `MODEL`, `CONDITIONING`, and an `IMAGE` that only
+  sets the output size, plus `sampler`, `scheduler` (normal, karras —
+  popular for DPM samplers — or trailing), `seed`, `steps`, `cfg` and
+  `batch_size`. Wire a second CLIP Text Encode into `negative` for a
+  negative prompt.
+- **KSampler (Image)** — img2img: like KSampler, but starts from the `image`
+  you connect. `denoise` 0–1 sets how much changes (about 0.3–0.6 keeps the
+  composition). Chain KSampler → Resize Image → KSampler (Image) at ~0.4
+  for a "hires fix".
+- **KSampler (Inpaint)** — repaints only the white part of `mask` (e.g. Load
+  Image's second output) and keeps the rest of the image.
 
 ### image (real, CPU-only operations)
 
-- **Empty Image** — `width`, `height`, and a `color` hex field. Creates a
-  solid-color canvas — the usual starting point for a graph when you're not
-  loading an existing photo.
-- **Resize Image** — `width`/`height`. Resizes an incoming image.
+- **Empty Image** — `width`, `height`, and a `color` (any CSS colour: `#202020`,
+  `rgb(32,32,32)`, `black`). Creates a solid-colour canvas.
+- **Resize Image** — `width`/`height`.
 - **Blur** — `radius`. Gaussian blur.
 - **Brightness / Contrast** — two sliders, 0–3× each (1.0 = unchanged).
 - **Hue / Saturation** — `hue_shift_degrees` (-180 to 180) and `saturation`
   (0–3×).
-- **Blend** — takes a `base` and an `overlay` image, a `mode` dropdown
-  (normal / multiply / screen), and an `opacity` slider.
-- **Text Overlay** — draws `text` onto the image at a given `x`/`y`
-  position, `size`, and `color`.
+- **Blend** — a `base` and an `overlay` image, a `mode` (normal / multiply /
+  screen), and an `opacity` slider.
+- **Text Overlay** — draws `text` at `x`/`y` with a `size` and `color`.
 
 ### output
 
-- **Preview Image** — sends the incoming image to the Output Gallery
-  without any other side effect.
-- **Save Image** — same, but with a `filename_prefix` used when naming the
-  saved file (e.g. `PixelFlow_a1b2c3d4.png`).
+- **Preview Image** — shows the image in the gallery and inside the node
+  without keeping it: previews go to a `temp\` folder that is emptied every
+  time PixelFlow starts.
+- **Save Image** — saves to `outputs\` as `<prefix>_00001_.png`,
+  `<prefix>_00002_.png`, … (so files sort in creation order). The prefix can
+  contain subfolders (`portraits/hero`) and the tokens `%date%`, `%time%`,
+  `%seed%` and `%model%`.
 
-Both of these always run when they're part of your graph, even if nothing
-else downstream depends on them — they're the two ways to actually see a
-result.
+Both always run when they're part of your graph — they're the two ways to
+actually see a result. Their PNGs embed the graph and the seed.
 
 ## Generating images
 
 **Load Checkpoint → CLIP Text Encode → KSampler → Save Image** runs a real
 Stable Diffusion pipeline (via `diffusers`) end to end:
 
-- **`ckpt_name`** on Load Checkpoint can be: the filename of a
-  `.safetensors`/`.ckpt` file (or a diffusers-format folder) you've placed
-  in the project's `models\checkpoints\` folder, or a Hugging Face Hub repo
-  id like `stabilityai/sd-turbo` (the default) or
-  `stable-diffusion-v1-5/stable-diffusion-v1-5`. A repo id is downloaded
-  and cached automatically the first time you use it — that needs internet
-  access once, and can take a while depending on the model's size.
+- **Models**: SD 1.x/2.x, SDXL, SD3 and Flux checkpoints are recognised
+  automatically — from a diffusers folder's `model_index.json`, or from a
+  single `.safetensors`/`.ckpt` file's contents. A Hub repo id is downloaded
+  the first time (only the files the pipeline needs); the progress area
+  shows the download (e.g. "downloading 512 MB / 2.0 GB"). Without internet,
+  a model that isn't downloaded yet fails with a clear message.
+- **Precision** (`dtype` on Load Checkpoint): `auto` uses fp16 for SD/SDXL
+  and bf16 for SD3/Flux on a GPU, fp32 on CPU. `fp32` is slower but avoids
+  black/NaN images with some SDXL VAEs.
+- **Memory**: models you switch between stay loaded while they fit in the
+  GPU's memory (minus a reserve for the actual generation); older ones move
+  to system RAM and come back quickly when reused. A model too big for the
+  GPU on its own (e.g. Flux on a smaller card) runs with CPU offload —
+  slower, but it runs. **System → Free memory** unloads everything.
 - PixelFlow uses your GPU automatically if you have a CUDA-capable one and
-  installed a CUDA build of `torch`; otherwise it runs on CPU, which works
-  but is slow — the default `stabilityai/sd-turbo` checkpoint is a
-  distilled model designed to need very few steps, chosen specifically to
-  keep the out-of-the-box CPU experience usable. A full-size SD1.x/SDXL
-  checkpoint at 20+ steps can take minutes per image on CPU.
-- There's no image-to-image or inpainting yet: the `IMAGE` you feed into
-  `latent_image` (typically from **Empty Image**) only sets the output
-  width/height, not its starting content — every run generates from
-  scratch (txt2img only).
-- The first generation after starting the app is slower than the rest: the
-  loaded pipeline is cached in memory, so only the very first run (or the
-  first run after switching to a different `ckpt_name`) pays the loading
-  cost.
+  a CUDA build of `torch`; otherwise it runs on CPU, which works but is
+  slow — the default `stabilityai/sd-turbo` checkpoint is a distilled model
+  designed for 1–4 steps at cfg 0.
+- Only the nodes that lead to a Save Image or Preview Image run, and a node
+  whose settings and inputs haven't changed since the last run is reused:
+  with a fixed `seed`, tweaking a Blur after the sampler re-runs just the
+  Blur.
+- Large images (over about 1536×1536) are decoded in tiles to save GPU
+  memory, and a run that runs out of GPU memory is retried once that way.
 
 ## Saving and loading your work
 
-- **Save Workflow** — opens a small dialog asking for a name, then saves
-  your current graph to the backend's `workflows\` folder under that name.
-- **Load workflow ▾** — a dropdown of everything saved that way; picking
-  one replaces your current graph with it.
-- **Export JSON** — downloads your current graph as a `.json` file you can
-  keep, share, or move to another PixelFlow install.
-- **Import JSON** — loads a graph from a `.json` file on your computer
-  (from Export JSON, or handed to you by someone else).
+- **Save** (<kbd>Ctrl+S</kbd>) — asks for a name the first time, then saves
+  to the `workflows\` folder. Saving over an existing name asks first.
+  Names can use letters, digits, spaces, `_ - . ( )` (up to 100 characters,
+  not ending in a dot or space).
+- **Workflows…** (<kbd>Ctrl+O</kbd>) — every saved workflow with its date:
+  **Load**, **Rename**, **Duplicate** or **Delete** it.
+- **Unsaved changes** — loading, importing, clearing or loading the example
+  asks first when your graph has changes you haven't saved.
+- **Auto-save** — your current graph is kept in the browser and comes back
+  when you reload the page or reopen the app. The queue, gallery and run
+  history are reloaded from the server, which keeps them across restarts.
+- **Export JSON** — downloads your graph as a `.json` file.
+- **Import…** — loads a graph from a `.json` file, or from a **PNG made by
+  PixelFlow** (or ComfyUI): the graph that made the image is stored inside
+  it. Dropping such a PNG on the canvas asks whether to load its workflow or
+  use it as an image.
 
-There's currently no way to delete or rename a saved workflow from the UI —
-do that by removing/renaming its `.json` file directly in the `workflows\`
-folder.
+## The image viewer
+
+Click a gallery image to open it. <kbd>←</kbd>/<kbd>→</kbd> (or the arrow
+buttons) move between images, <kbd>Esc</kbd> closes. The side panel shows
+the model, seed, sampler, steps, cfg and prompt, and offers:
+
+- **Load workflow** — the graph that made this image;
+- **Reuse seed** — puts the seed into the selected sampler (or the first
+  one) and sets it to *fixed*;
+- **Send to Load Image** — copies the image into the uploads and adds a Load
+  Image node for it (e.g. for img2img);
+- **Delete** — deletes the file.
 
 ## Undo, redo, and finding your way around
 
-- **Undo** / **Redo** (also <kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd>) step
-  through your recent graph edits — adding/removing nodes, moving them,
-  changing a widget's value, connecting/disconnecting.
+- **Undo** / **Redo** (<kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd>) step through
+  your recent edits — adding/removing nodes, connecting/disconnecting,
+  moving nodes and changing values (last 100 steps). While you type in a
+  text field, <kbd>Ctrl+Z</kbd> undoes your typing instead.
 - **Fit View** recenters and rescales the canvas so your whole graph is
-  visible — useful after you've panned or zoomed away, or after loading a
-  workflow you haven't seen laid out yet. On an empty graph, it just resets
-  the view to the default position and zoom.
-- **Scroll** to zoom in/out on the canvas; click-drag empty canvas space to
-  pan.
-- **Right-click** the canvas for litegraph's own "Add Node" / "Add Group"
-  menu, an alternative to the sidebar.
+  visible.
+- **Scroll** to zoom; click-drag empty canvas space to pan.
+- **?** (or <kbd>?</kbd>) lists every keyboard shortcut.
+
+## The System panel
+
+Click the GPU name in the top-right corner: PixelFlow's version, the device
+and its free memory, torch/diffusers/Python versions, where your data,
+models and logs are, and which models are loaded (on the GPU, in RAM, or
+offloaded). **Free memory** unloads all models; **Open log folder** opens the
+folder with `pixelflow.log` (useful when reporting a problem).
+
+## Where your files are
+
+- Running from source: next to the project (`outputs\`, `uploads\`,
+  `workflows\`, `models\`, `logs\`).
+- The packaged app: `%LOCALAPPDATA%\PixelFlow` — unless a `portable.txt`
+  file sits next to `PixelFlow.exe` (then next to the exe), or an older
+  PixelFlow already kept its data there.
+- `PIXELFLOW_HOME` overrides the data folder; `PIXELFLOW_MODELS_DIR` (or
+  `{"models_dir": "D:/sd-models"}` in `settings.json` in the data folder)
+  keeps big models somewhere else, e.g. on a drive OneDrive doesn't sync.
 
 ## Load Example
 
-**Load Example** clears your current graph and builds a starter one:
-Load Checkpoint → CLIP Text Encode (with a sample prompt already filled in)
-→ Empty Image → KSampler → Save Image, fully wired. Its KSampler is set to
-4 steps and cfg 0, which is what the default `stabilityai/sd-turbo`
-checkpoint is designed for; raise them (e.g. 20–30 steps, cfg ~7) if you
-switch to a regular SD1.x checkpoint. Use it as a quick way
-to see a full run end to end, or as a starting point to build from — the
-first run downloads the default checkpoint if it isn't cached yet, so it's
-slower than later runs.
+**Load Example** builds a starter graph: Load Checkpoint → CLIP Text Encode
+(with a sample prompt) → Empty Image → KSampler → Save Image, fully wired.
+Its KSampler is set to 4 steps and cfg 0, which is what the default
+`stabilityai/sd-turbo` checkpoint is designed for; raise them (e.g. 20–30
+steps, cfg ~7) for a regular SD checkpoint.
 
 ## Troubleshooting
 
-- **A run says "Error"** — the message names the failure. The most common
-  cause is a required input left unconnected (every socket dot on a node
-  needs a wire in, unless it has a widget instead).
-- **The queue/gallery stop updating** — the browser's connection to the
-  backend (a WebSocket) may have dropped, e.g. if the server restarted. Reload
-  the page to reconnect.
-- **A right-click menu is stuck on screen** — click anywhere on the canvas
-  to dismiss it.
-- **Load Image can't find your file** — the filename must match exactly
-  (including extension) what's actually sitting in the `uploads\` folder.
+- **A run says "Error"** — the message names the failure and the node is
+  outlined in red. Details, including tracebacks, are in `pixelflow.log`
+  (System → Open log folder).
+- **The queue/gallery stop updating** — the dot next to the PixelFlow name
+  is green while connected and pulses amber while it reconnects
+  (automatically). Once it's back, the queue and gallery catch up.
+- **Out of GPU memory** — try a smaller size or batch, or System → Free
+  memory.
+- **"isn't downloaded yet and the Hugging Face Hub can't be reached"** —
+  connect once to download the model, or put it in `models\checkpoints\`.
+- **A right-click menu is stuck on screen** — click anywhere on the canvas.
+- **Load Image can't find your file** — pick it from the dropdown or upload
+  it again; the dropdown lists what's in the `uploads\` folder.
