@@ -8,6 +8,11 @@ uploads/*
 !uploads/.gitkeep
 .pytest_cache/
 
+# Runtime data written next to the app (backend/paths.py): the rotating log and persisted history.
+/logs/
+/history.jsonl
+/history.jsonl.tmp
+
 # Build & release output
 build-release/
 dist-release/
@@ -23,3 +28,14 @@ PixelFlow-*-Windows.7z.sha256
 # Downloaded/extracted third-party runtime bundled into releases (see scripts/build_release.ps1).
 # Anchored to the root only -- frontend/vendor/ holds vendored litegraph.js source, not this cache.
 /vendor/
+
+# User models (multi-GB checkpoints/LoRAs), saved workflows and Preview Image's
+# throwaway files (backend/paths.py). Never commit these.
+/models/
+/workflows/*
+!/workflows/.gitkeep
+/temp/
+/settings.json
+
+# Stamped by scripts/build_release.ps1 during a build (backend/config.py reads it).
+/backend/_version.py

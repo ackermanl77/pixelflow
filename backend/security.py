@@ -70,3 +70,54 @@ class LocalOriginMiddleware:
                 await send({"type": "websocket.close", "code": 1008})
                 return
         await self.app(scope, receive, send)
+
+
+class MaxBodySizeMiddleware:
+    """Rejects request bodies over a size limit with 413 (report item R6):
+    up front from Content-Length, and otherwise by reading the (chunked)
+    body up to the limit before the app sees it - the endpoints read the
+    whole body anyway, and an exception raised mid-read would be turned
+    into a generic 400 by FastAPI. `limits` maps a path to a callable
+    returning that path's limit (looked up per request, so a patched
+    MAX_UPLOAD_BYTES applies); everything else gets `default_limit`."""
+
+    def __init__(self, app: ASGIApp, default_limit: int, limits=None) -> None:
+        self.app = app
+        self.default_limit = default_limit
+        self.limits = dict(limits or {})
+
+    def _limit(self, path: str) -> int:
+        getter = self.limits.get(path)
+        return int(getter()) if getter is not None else self.default_limit
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] not in STATE_CHANGING_METHODS:
+            await self.app(scope, receive, send)
+            return
+        limit = self._limit(scope.get("path", ""))
+        too_large = PlainTextResponse(f"Request body exceeds {limit} bytes", status_code=413)
+        length = _header(scope, b"content-length")
+        if length is not None and length.isdigit() and int(length) > limit:
+            await too_large(scope, receive, send)
+            return
+
+        messages = []
+        received = 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            if message["type"] != "http.request":
+                break
+            received += len(message.get("body", b""))
+            if received > limit:
+                await too_large(scope, receive, send)
+                return
+            if not message.get("more_body", False):
+                break
+
+        async def replay():
+            if messages:
+                return messages.pop(0)
+            return await receive()
+
+        await self.app(scope, replay, send)
