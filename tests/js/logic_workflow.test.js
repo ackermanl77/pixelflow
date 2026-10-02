@@ -177,6 +177,8 @@ test("undo history is capped and skips duplicate snapshots (F6)", () => {
   assert.equal(index, 2);
   [stack, index] = L.pushUndo(stack, index, "s4", 3);
   assert.equal(stack.length, 3);
+  assert.equal(index, 2);
   [stack, index] = L.pushUndo(stack, 0, "branch", 3);
   assert.deepEqual(stack, ["s2", "branch"]);
+  assert.equal(index, 1);
 });

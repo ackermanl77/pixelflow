@@ -43,3 +43,9 @@ PixelFlow-*-Windows.7z.[0-9][0-9][0-9]
 
 # Stamped by scripts/build_release.ps1 during a build (backend/config.py reads it).
 /backend/_version.py
+
+# Node dev tooling (package.json): dependencies, and Playwright output/browsers
+# (installed under node_modules with PLAYWRIGHT_BROWSERS_PATH=0).
+/node_modules/
+/test-results/
+/playwright-report/

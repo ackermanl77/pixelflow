@@ -1044,7 +1044,7 @@ function saveGraphLocally(snap) {
 }
 
 function restoreSavedGraph() {
-  let saved = null;
+  let saved;
   try {
     saved = localStorage.getItem(GRAPH_STORAGE_KEY);
   } catch (_) {

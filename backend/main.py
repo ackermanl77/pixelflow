@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import paths
-from .config import APP_ID, app_version
+from .config import APP_ID, app_version, test_mode
 from .engine.graph import PromptValidationError, validate_prompt
 from .engine.queue import ConnectionManager, ExecutionQueue
 from .logging_setup import log_runtime_info, setup_logging
@@ -87,9 +87,12 @@ async def lifespan(_app: FastAPI):
     if restored:
         logger.info("restored %d history entries from %s", restored, queue.history_path)
     queue.start()
-    # torch/diffusers load in the background (report item P6): the UI is
-    # usable right away and the first prompt doesn't pay for the import.
-    runtime.warm_up_in_background(lambda: log_runtime_info(logger))
+    if test_mode():
+        logger.warning("test mode (PIXELFLOW_TEST_MODE): torch is not loaded and models can't be")
+    else:
+        # torch/diffusers load in the background (report item P6): the UI is
+        # usable right away and the first prompt doesn't pay for the import.
+        runtime.warm_up_in_background(lambda: log_runtime_info(logger))
     yield
 
 
@@ -402,6 +405,24 @@ def get_models(kind: str):
 
 
 def _system_info() -> Dict[str, Any]:
+    if test_mode():  # never import torch in the lightweight test server
+        return {
+            "app": APP_ID,
+            "version": app_version(),
+            "python": platform.python_version(),
+            "torch": None,
+            "cuda": None,
+            "diffusers": None,
+            "device": "cpu",
+            "device_name": "test mode",
+            "vram_free": None,
+            "vram_total": None,
+            "loaded_models": [],
+            "data_dir": str(paths.ROOT_DIR),
+            "models_dir": str(paths.MODELS_DIR),
+            "log_dir": str(paths.LOG_DIR),
+            "test_mode": True,
+        }
     t = runtime.torch()
     info: Dict[str, Any] = {
         "app": APP_ID,

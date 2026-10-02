@@ -1,0 +1,23 @@
+{
+  "name": "pixelflow-frontend-dev",
+  "private": true,
+  "description": "Dev-only tooling for PixelFlow's frontend (lint, unit tests, browser smoke test). Nothing here ships: the app serves frontend/ as plain files.",
+  "license": "UNLICENSED",
+  "scripts": {
+    "test": "node --test \"tests/js/*.test.js\"",
+    "lint": "eslint .",
+    "e2e": "cross-env PLAYWRIGHT_BROWSERS_PATH=0 playwright test",
+    "e2e:install": "cross-env PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium",
+    "check": "npm run lint && npm test && npm run e2e"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
+    "cross-env": "^10.1.0",
+    "eslint": "^10.11.0",
+    "globals": "^17.13.0"
+  }
+}
