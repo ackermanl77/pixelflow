@@ -158,10 +158,12 @@ def test_weighted_long_prompt_with_clip_skip_samples(output_dir):
 def test_other_architectures_get_plain_text_without_weight_syntax():
     class _Pipe:
         tokenizer = object()
-        tokenizer_2 = object()  # SDXL-style: two encoders
+        tokenizer_2 = object()
         text_encoder = object()
 
-    kwargs = generation._prompt_kwargs({"arch": "sdxl"}, _Pipe(), {"text": "a (cat:1.3)"}, {"text": "[ugly]"}, 1)
+    # An architecture without an encoder of ours (SDXL/SD3/Flux have one:
+    # tests/test_prompt_encoding.py).
+    kwargs = generation._prompt_kwargs({"arch": "other"}, _Pipe(), {"text": "a (cat:1.3)"}, {"text": "[ugly]"}, 1)
     assert kwargs["prompt"] == "a cat" and kwargs["negative_prompt"] == "ugly"
 
 

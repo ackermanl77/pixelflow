@@ -47,12 +47,13 @@ def free_memory() -> None:
 @register_node("CLIP Text Encode")
 class CLIPTextEncode(NodeBase):
     """The prompt text as CONDITIONING. Weighting with (word:1.2), (word),
-    [word] is supported, and prompts longer than 77 CLIP tokens are encoded
-    in chunks instead of being cut off (SD 1.x/2.x checkpoints; other
-    architectures get the text with the weighting syntax removed). The
-    encoding itself happens in the sampler, where the model is known. Wire
-    a second instance into the sampler's `negative` input for a negative
-    prompt."""
+    [word] is supported for SD 1.x/2.x, SDXL, SD3 and Flux, and prompts
+    longer than 77 CLIP tokens are encoded in chunks instead of being cut
+    off (SD 1.x/2.x, SDXL, SD3; Flux reads up to 512 T5 tokens). `clip_skip`
+    applies to the CLIP encoders of SD 1.x/2.x, SDXL and SD3 (Flux has
+    none). The encoding itself happens in the sampler, where the model is
+    known (backend/nodes/prompt_weights.py). Wire a second instance into the
+    sampler's `negative` input for a negative prompt (Flux ignores it)."""
 
     CATEGORY = "conditioning"
     RETURN_TYPES = ("CONDITIONING",)
@@ -307,41 +308,36 @@ def _texts(positive, negative):
     return positive.get("text", ""), (negative.get("text", "") if negative else None)
 
 
+def _repeat_rows(tensor, repeat: int):
+    """Repeat a [1, ...] embedding `repeat` times along the batch dimension."""
+    return tensor if repeat == 1 else tensor.repeat(repeat, *([1] * (tensor.dim() - 1)))
+
+
 def _prompt_kwargs(model, pipe, positive, negative, repeat: int):
-    """`prompt`/`negative_prompt` (plain text), or `prompt_embeds`/
-    `negative_prompt_embeds` when weighting, long prompts or clip skip need
-    our own CLIP encoding (SD 1.x/2.x)."""
+    """`prompt`/`negative_prompt` (plain text), or prompt embeddings
+    (`prompt_embeds`, plus `pooled_prompt_embeds` for SDXL/SD3/Flux, and
+    negatives) when weighting, long prompts or clip skip need our own
+    encoding (prompt_weights.py, report item B9)."""
     text, negative_text = _texts(positive, negative)
     clip_skip = int(positive.get("clip_skip", 0) or 0)
     arch = (model or {}).get("arch") or models.pipeline_meta(model.get("pipeline") if model else None).get("arch")
-    tokenizer = getattr(pipe, "tokenizer", None)
-    can_embed = (
-        arch in (None, models.ARCH_SD)
-        and tokenizer is not None
-        and getattr(pipe, "text_encoder", None) is not None
-        and getattr(pipe, "tokenizer_2", None) is None
-        and hasattr(tokenizer, "model_max_length")
-    )
-    # clip_skip goes through our own encoder too: diffusers' clip_skip path
-    # reaches for CLIPTextModel.text_model, which transformers 5 removed.
-    if can_embed and (
-        clip_skip > 0
-        or prompt_weights.needs_embeddings(tokenizer, text)
-        or (negative_text and prompt_weights.needs_embeddings(tokenizer, negative_text))
-    ):
-        prompt_embeds, negative_embeds = prompt_weights.encode_prompt_pair(pipe, text, negative_text or "", clip_skip)
-        return {
-            "prompt_embeds": prompt_embeds.repeat(repeat, 1, 1),
-            "negative_prompt_embeds": negative_embeds.repeat(repeat, 1, 1),
-        }
-    if not can_embed:
+    family = prompt_weights.encoding_family(pipe, arch)
+    # clip_skip goes through our own encoder too: diffusers' SD 1.x clip_skip
+    # path reaches for CLIPTextModel.text_model, which transformers 5 removed.
+    if prompt_weights.needs_custom_encoding(pipe, family, [text, negative_text], clip_skip):
+        embeds = prompt_weights.encode_conditioning(pipe, family, text, negative_text, clip_skip)
+        return {key: _repeat_rows(value, repeat) for key, value in embeds.items()}
+    if family != prompt_weights.FAMILY_SD:
+        # Plain text: either nothing of ours is needed (diffusers' own
+        # encoding is the reference then), or the pipeline is one we have no
+        # encoder for; either way no weighting syntax reaches the model.
         text = prompt_weights.plain_text(text)
         negative_text = prompt_weights.plain_text(negative_text) if negative_text is not None else None
     kwargs = {
         "prompt": [text] * repeat if repeat > 1 else text,
         "negative_prompt": ([negative_text] * repeat if repeat > 1 else negative_text) if negative_text is not None else None,
     }
-    if clip_skip:
+    if clip_skip and family is None:
         kwargs["clip_skip"] = clip_skip
     return kwargs
 

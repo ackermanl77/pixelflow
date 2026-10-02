@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from . import runtime
-from .. import paths
+from .. import config, paths
 from ..paths import PathTraversalError, safe_path
 
 logger = logging.getLogger(__name__)
@@ -575,6 +575,10 @@ class PipelineCache:
         dtype_option: str = "auto",
         on_progress: Optional[Callable[..., None]] = None,
     ) -> CacheEntry:
+        if config.test_mode():
+            raise RuntimeError(
+                f"model loading is disabled in test mode (PIXELFLOW_TEST_MODE); not loading '{ckpt_name}'"
+            )
         device = "cuda" if runtime.cuda_available() else "cpu"
         key = (ckpt_name, device, dtype_option)
         with self.lock:
