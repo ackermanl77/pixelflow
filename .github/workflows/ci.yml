@@ -5,20 +5,36 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # release.yml runs this same suite before it builds anything.
+  workflow_call:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, Python ${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.12"
+          # The shipped configuration: releases are built on Windows with Python 3.14.
+          - os: windows-latest
+            python: "3.14"
+    runs-on: ${{ matrix.os }}
+    env:
+      # The real-pipeline tests fail (instead of skipping) when the tiny test checkpoint can't be
+      # downloaded, so a green run always includes diffusion coverage (tests/_hub.py).
+      PIXELFLOW_REQUIRE_HUB: "1"
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
           cache: "pip"
           cache-dependency-path: requirements.txt
 
-      # Install the CPU-only torch wheel first so requirements.txt's `torch>=2.4` is already
+      # Install the CPU-only torch wheel first so requirements.txt's torch requirement is already
       # satisfied and pip doesn't pull the multi-GB CUDA build onto a GPU-less runner.
       - name: Install dependencies
         run: |
@@ -27,11 +43,12 @@ jobs:
           python -m pip install -r requirements.txt pytest httpx
 
       # Cache the tiny test checkpoint (hf-internal-testing/tiny-stable-diffusion-torch) the
-      # real-pipeline tests download; they skip themselves if the Hub is unreachable.
+      # real-pipeline tests download.
       - uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: hf-tiny-sd-v1
+          key: hf-tiny-sd-v1-${{ runner.os }}
 
+      # -rs lists every skipped test and why (e.g. the `gpu` tests on these GPU-less runners).
       - name: Run tests
-        run: python -m pytest -q
+        run: python -m pytest -q -rs

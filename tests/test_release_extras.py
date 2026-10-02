@@ -1,0 +1,60 @@
+"""Release/CI configuration checks for K3 (2 GiB asset limit), K4 (lock
+file), K5 (spec cleanups), K6 (version + signing) and T5 (CI matrix and
+gating). These read the files - nothing is built."""
+
+import ast
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+BUILD = (ROOT / "scripts" / "build_release.ps1").read_text(encoding="utf-8")
+RELEASE = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+SPEC = (ROOT / "PixelFlow.spec").read_text(encoding="utf-8")
+
+
+def test_big_archives_are_split_below_githubs_asset_limit():
+    assert "$MaxAssetBytes = 1900MB" in BUILD
+    assert '"-v$volumeSize"' in BUILD
+    assert "PixelFlow-*-Windows.7z*" in RELEASE
+    assert "Get-ChildItem -Path \"PixelFlow-*-Windows.7z*\"" in RELEASE, "pwsh doesn't glob for gh"
+
+
+def test_lock_file_pins_the_tested_versions_and_the_build_uses_it():
+    lock = (ROOT / "requirements-lock.txt").read_text(encoding="utf-8")
+    pins = dict(line.split("==") for line in lock.splitlines() if line and not line.startswith("#"))
+    for name in ("diffusers", "transformers", "torch", "fastapi", "pywebview", "pyinstaller"):
+        assert name in pins, name
+    assert "+" not in pins["torch"], "the CUDA flavour comes from the index URL, not the pin"
+    assert '@("-c", "requirements-lock.txt")' in BUILD
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert re.search(r"^diffusers>=[\d.]+,<[\d.]+$", requirements, re.MULTILINE), "diffusers needs an upper bound"
+    assert re.search(r"^torch>=2\.7$", requirements, re.MULTILINE), "sm_120 needs torch 2.7+"
+    assert re.search(r"^peft", requirements, re.MULTILINE)
+
+
+def test_spec_collects_webview_and_drops_torch_build_files():
+    tree = ast.parse(SPEC)  # it's Python
+    assert tree
+    assert 'packages = ["uvicorn", "webview"' in SPEC
+    assert "torch/include/" in SPEC and '.endswith(".lib")' in SPEC
+    assert '"torch.utils.tensorboard"' in SPEC
+
+
+def test_version_is_stamped_and_signing_is_checked():
+    assert "backend\\_version.py" in BUILD and "__version__" in BUILD
+    assert "$CertificateThumbprint" in BUILD and "$CertificateSubject" not in BUILD
+    sign = BUILD.index("& signtool sign")
+    assert "$LASTEXITCODE" in BUILD[sign : sign + 400], "a failed signature must stop the build"
+    assert "SIGNING_CERT_PFX" in RELEASE
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "/backend/_version.py" in gitignore
+
+
+def test_ci_matches_the_shipped_configuration_and_gates_releases():
+    assert "windows-latest" in CI and '"3.14"' in CI
+    assert 'PIXELFLOW_REQUIRE_HUB: "1"' in CI
+    assert "pytest -q -rs" in CI
+    assert "workflow_call:" in CI
+    assert "uses: ./.github/workflows/ci.yml" in RELEASE and "needs: test" in RELEASE
+    assert 'python-version: "3.14"' in RELEASE
