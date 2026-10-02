@@ -20,8 +20,9 @@ ComfyUI's own frontend uses) for wiring nodes together and running them.
   is slow for anything beyond a distilled few-step model — see
   `docs/PROJECT_STATUS.md` for details and current limitations. SD 1.x/2.x,
   SDXL, SD3 and Flux checkpoints are detected automatically; txt2img,
-  img2img, inpainting, LoRAs, prompt weighting and karras/trailing
-  schedules are supported, with live previews while sampling.
+  img2img, inpainting, LoRAs, prompt weighting and long prompts (all four
+  families), clip skip and karras/trailing schedules are supported, with
+  live previews while sampling.
 - Only the nodes an output (Save/Preview Image) needs are run, and unchanged
   nodes are reused from the previous run — re-queueing after a Blur tweak
   doesn't re-sample a fixed-seed image.
@@ -131,6 +132,21 @@ skip themselves if the Hugging Face Hub is unreachable (unless
 `tests/test_frontend_logic.py` also runs the frontend's unit tests
 (`node --test tests/js/*.test.js`), `node --check`, and a check that every
 element `app.js` looks up exists in `index.html`.
+
+Frontend tooling (Node 20.19+; dev only, nothing of it ships):
+
+```powershell
+npm ci                 # ESLint + Playwright, into node_modules/ (gitignored)
+npm run lint           # ESLint (flat config: eslint.config.js)
+npm test               # the node:test unit tests
+npm run e2e:install    # once: Chromium for Playwright, under node_modules/
+npm run e2e            # browser smoke test against the backend in test mode
+```
+
+`npm run e2e` starts the backend with `PIXELFLOW_TEST_MODE=1` (no torch, no
+model loading, a throwaway data folder in the temp directory) through
+`tests/e2e/server.py`; it uses `.venv`'s Python, or `PIXELFLOW_PYTHON`. CI
+runs all three in a separate `frontend` job.
 
 ## Security
 

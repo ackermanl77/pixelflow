@@ -137,10 +137,20 @@ re-create any single image of a batch.
 - **CLIP Text Encode** — a multiline `text` box (your prompt), outputs
   `CONDITIONING`. Weighting works like in A1111/ComfyUI: `(word)` ×1.1,
   `((word))` ×1.21, `[word]` ÷1.1, `(word:1.4)` exactly ×1.4, and `\(` for a
-  literal bracket. Long prompts (over 75 tokens) are no longer cut off.
-  `clip_skip` 1 equals "clip skip 2" elsewhere. (Weighting, long prompts and
-  clip skip apply to SD 1.x/2.x checkpoints; for SDXL/SD3/Flux the weighting
-  syntax is removed and the plain text is used.)
+  literal bracket. Long prompts are no longer cut off. `clip_skip` 1 equals
+  "clip skip 2" elsewhere. Per model family:
+  - **SD 1.x/2.x** — weighting, long prompts (75-token chunks), clip skip.
+  - **SDXL** — weighting and long prompts on both text encoders; `clip_skip`
+    goes further back than SDXL's default (which already uses the
+    second-to-last layer, so 1 here is one layer beyond that). With no
+    negative prompt connected, SDXL uses an "empty" (all-zero) negative, as
+    diffusers does.
+  - **SD3** — weighting and long prompts on CLIP and T5 (T5 reads up to 512
+    tokens); clip skip on the CLIP encoders.
+  - **Flux** — weighting (on T5, which reads up to 512 tokens). Flux has no
+    clip skip and ignores negative prompts.
+  A prompt without weights that fits in 75 tokens is passed to the model
+  exactly as before.
 
 ### sampling
 

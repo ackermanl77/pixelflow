@@ -140,7 +140,9 @@ files directly.
   Errors are drawn on the failing node; the running-node outline and
   mute/bypass shading are drawn, never written to `node.color`.
 - **`frontend/logic.js`** — the DOM-free helpers `app.js` uses, unit-tested
-  with `node --test tests/js` (run from pytest when Node is installed).
+  with `npm test` / `node --test tests/js` (also run from pytest when Node
+  is installed); `npm run lint` (ESLint) and `npm run e2e` (Playwright smoke
+  test against `PIXELFLOW_TEST_MODE=1`) — see `docs/BUILD.md`.
 - **`frontend/vendor/`** — litegraph.js and its CSS, vendored locally.
 - **`desktop.py`** — see Entry points.
 
@@ -168,11 +170,19 @@ Generation details (`backend/nodes/generation.py`):
   and carries that seed; Save/Preview embed a per-image prompt (`seed + i`,
   `batch_size` 1), so any single image can be reproduced. Outputs report
   `{"seed": N, "seeds": [...]}`.
-- Prompts: for SD 1.x/2.x the sampler encodes the prompt itself when it has
-  weights, more than 75 tokens or `clip_skip` (75-token chunks, A1111-style
-  weighting with mean restoration; identical to diffusers' own encoding for a
-  plain short prompt). Other architectures get the plain text with the
-  weighting syntax stripped.
+- Prompts (`prompt_weights.py`): the sampler encodes the prompt itself
+  when it has weights, is too long for the plain path or uses `clip_skip`,
+  for every supported family (A1111-style weighting with mean restoration,
+  per text encoder). SD 1.x/2.x: 75-token CLIP chunks. SDXL: CLIP-L and
+  CLIP-G chunked alike (penultimate layer, concatenated per token), pooled
+  from CLIP-G's first chunk, an unconnected negative zeroed when the
+  checkpoint asks for it. SD3: chunked CLIP-L/CLIP-G zero-padded to T5's
+  width, followed by T5 (256 tokens, up to 512 for a longer prompt). Flux:
+  weighted T5 (512 tokens), CLIP-L pooled from the first 75 tokens; no clip
+  skip, no negative. The results equal each pipeline's own `encode_prompt()`
+  for a plain short prompt (unit-tested against tiny random encoders), and
+  plain short prompts still go to diffusers as text. Unknown architectures
+  get the plain text with the weighting syntax stripped.
 - LoRAs: a MODEL carries `loras: [(name, strength)]`; the sampler loads each
   file once per pipeline as a named adapter and activates exactly this run's
   set (`set_adapters`), or disables them for a graph without LoRAs. Needs
@@ -185,9 +195,11 @@ Generation details (`backend/nodes/generation.py`):
 ## Known limitations
 
 - **SDXL/SD3/Flux are detected and loaded, but only unit-tested.** The real
-  multi-GB weights haven't been run on this machine; prompt weighting and
-  long prompts apply to SD 1.x/2.x only (SDXL prompts are still truncated at
-  77 tokens). Flux/SD3 latents get no live preview.
+  multi-GB weights haven't been run on this machine. Their prompt
+  encoding (weighting, long prompts, clip skip) matches diffusers' own for
+  plain prompts with tiny test encoders, but how weighted/long prompts look
+  with real SDXL/SD3/Flux checkpoints still needs a manual check. Encoded
+  prompts aren't cached between runs. Flux/SD3 latents get no live preview.
 - **The output cache is in memory only** and holds the last run's node
   outputs (images); it's lost on restart. Nodes must not mutate their
   inputs in place.
@@ -196,9 +208,11 @@ Generation details (`backend/nodes/generation.py`):
 - **No in-app mask editor** — make masks as PNG alpha or a grayscale image.
 - **No ControlNet, model upscaler, templates or X/Y plot yet** (report items
   B7, F18).
-- **Frontend tests are unit tests of `logic.js` plus a DOM-wiring check**;
-  there's no browser (Playwright) test, so UI behaviour needs a manual pass
-  in a real window.
+- **Frontend tests**: unit tests of `logic.js`, ESLint, and one Playwright
+  smoke test (page load, node palette, adding and wiring nodes with the
+  mouse, running a torch-free graph, saving and loading a workflow) against
+  the backend in test mode. Generation itself, the image viewer, uploads and
+  drag-and-drop of files still need a manual pass in a real window.
 - **`torch.compile` is not offered** (needs `triton-windows`, not bundled).
 
 ## Desktop packaging

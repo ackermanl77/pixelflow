@@ -148,9 +148,12 @@ A few implementation notes for anyone touching these nodes:
   The architecture decides the pipeline class (`models.py`).
 - **`KSampler` calls the full pipeline**, not a separate encode/sample split.
   `CLIPTextEncode` returns `{"text", "clip_skip"}`; the sampler passes the
-  text to the pipeline, or — for weighted, long or clip-skipped SD 1.x/2.x
-  prompts — encodes it itself (`prompt_weights.py`) and passes
-  `prompt_embeds`.
+  text to the pipeline, or — for weighted, long or clip-skipped prompts —
+  encodes it itself (`prompt_weights.encode_conditioning()`, one encoder per
+  family: SD 1.x/2.x, SDXL, SD3, Flux) and passes `prompt_embeds` (plus
+  `pooled_prompt_embeds` and the negatives where the family has them). A new
+  sampler should build its prompt arguments with
+  `generation._prompt_kwargs()` rather than passing the text itself.
 - **GPU is used automatically** when `torch.cuda.is_available()`; the
   precision comes from Load Checkpoint's `dtype` (`models.resolve_dtype_name()`).
 - **img2img / inpainting** (`KSampler (Image)`, `KSampler (Inpaint)`) get

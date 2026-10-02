@@ -218,10 +218,38 @@ between runs:
   folder with `portable.txt` or an existing `outputs` folder there, and
   `PIXELFLOW_HOME`/`PIXELFLOW_MODELS_DIR` take precedence.
 
+## Frontend checks (lint, unit tests, browser smoke test)
+
+The frontend has a dev-only Node toolchain (`package.json`, committed
+`package-lock.json`; `node_modules/` is gitignored). Nothing of it is part of
+a release build.
+
+```powershell
+npm ci
+npm run lint          # ESLint over frontend/*.js and the JS tests
+npm test              # node:test unit tests (tests/js)
+npm run e2e:install   # once: Playwright's Chromium, into node_modules/
+npm run e2e           # Playwright smoke test (tests/e2e/smoke.spec.js)
+```
+
+The smoke test runs the backend in **test mode** (`PIXELFLOW_TEST_MODE=1`,
+via `tests/e2e/server.py` on port 8299 or `PIXELFLOW_E2E_PORT`): torch and
+diffusers are never imported, loading a model fails with a clear error, and
+all data goes to `%TEMP%\pixelflow-e2e-<port>` (emptied at every start), so
+it needs only the web dependencies (FastAPI, uvicorn, Pillow,
+python-multipart). It uses `.venv`'s Python unless `PIXELFLOW_PYTHON` names
+another. CI's `frontend` job (`ci.yml`, Linux, Node 22) runs all three.
+
 ## GPU checks before a release
 
 Tests marked `gpu` (`tests/test_gpu.py`) need a CUDA device: they're skipped
 in CI and on CPU-only machines. Run them on the RTX 5080 before a release:
+
+`tests/test_prompt_encoding.py` has one `gpu` test as well: the
+SDXL/SD3/Flux prompt encoders on CUDA, with tiny random encoders (nothing is
+downloaded). Real SDXL/SD3/Flux checkpoints are not part of any automated
+test; sample a weighted and a long prompt with each by hand before relying
+on them.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q -m gpu
