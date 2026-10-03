@@ -17,7 +17,10 @@ CPU = torch.device("cpu")
 
 
 def _close(a, b):
-    return a.shape == b.shape and torch.allclose(a.float(), b.float(), atol=1e-5)
+    # Relative as well as absolute: the same float32 maths on Linux's CPU kernels
+    # differed from Windows by more than atol=1e-5 on larger values (CI, Ubuntu).
+    # Real mismatches (weighting, wrong layer, truncation) are orders of magnitude larger.
+    return a.shape == b.shape and torch.allclose(a.float(), b.float(), rtol=1e-4, atol=1e-5)
 
 
 # ---- SDXL ----
