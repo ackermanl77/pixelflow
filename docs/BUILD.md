@@ -245,17 +245,17 @@ another. CI's `frontend` job (`ci.yml`, Linux, Node 22) runs all three.
 Tests marked `gpu` (`tests/test_gpu.py`) need a CUDA device: they're skipped
 in CI and on CPU-only machines. Run them on the RTX 5080 before a release:
 
-`tests/test_prompt_encoding.py` has one `gpu` test as well: the
-SDXL/SD3/Flux prompt encoders on CUDA, with tiny random encoders (nothing is
-downloaded). Real SDXL/SD3/Flux checkpoints are not part of any automated
-test; sample a weighted and a long prompt with each by hand before relying
-on them.
-
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q -m gpu
 $env:PIXELFLOW_GPU_SMOKE = "1"   # also sample a real 512x512 image with sd-turbo (~2.5 GB download)
 .\.venv\Scripts\python.exe -m pytest -q -m gpu
 ```
+
+`tests/test_prompt_encoding.py` has one `gpu` test as well: the
+SDXL/SD3/Flux prompt encoders on CUDA, with tiny random encoders (nothing is
+downloaded). Real SDXL/SD3/Flux checkpoints are not part of any automated
+test; sample a weighted and a long prompt with each by hand before relying
+on them.
 
 ## Offline operation
 

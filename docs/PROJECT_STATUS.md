@@ -18,6 +18,13 @@ window (`python desktop.py`, or the packaged `PixelFlow.exe`).
 | `python run.py` | Runs the FastAPI/uvicorn server with `--reload` at http://127.0.0.1:8288, opened in a normal browser tab. Use this while developing. |
 | `python desktop.py` | Runs the same server in a background thread and opens it in a native window via pywebview (no `--reload`; used for the packaged app). |
 | `release\PixelFlow.exe` | The packaged desktop app — same as `desktop.py`, but frozen with PyInstaller and bundling its own WebView2 Runtime. Built by `scripts\build_release.ps1`. |
+| `python tests/e2e/server.py [port]` | The backend in **test mode** (`PIXELFLOW_TEST_MODE=1`) on a throwaway data folder (`<temp>\pixelflow-e2e-<port>`, default port 8299) — what `npm run e2e` starts. |
+
+**Test mode** (`PIXELFLOW_TEST_MODE=1`, `backend/config.py::test_mode()`):
+torch/diffusers are never imported (no background warm-up, `/api/system`
+reports device `cpu` / "test mode" and `test_mode: true`), loading a model
+fails with a clear error, and torch-free graphs (Empty Image → Save Image, …)
+run normally. It needs only the web dependencies and starts in about a second.
 
 The port (8288, not ComfyUI's 8188) and the app id live in
 `backend/config.py`; `PIXELFLOW_PORT` overrides the port. In desktop mode, if
@@ -191,6 +198,23 @@ Generation details (`backend/nodes/generation.py`):
   some Flux versions) are dropped instead of failing.
 - VAE slicing is always on; VAE tiling above 1536×1536, with one tiled retry
   after an out-of-memory error.
+
+## Verification
+
+Run on 2026-10-03 in the dev `.venv` (Python 3.14, CUDA torch, RTX 5080):
+
+| Command | Result |
+|---|---|
+| `.\.venv\Scripts\python.exe -m pytest -q` | 329 passed, 1 skipped (the opt-in `PIXELFLOW_GPU_SMOKE` sd-turbo test) |
+| `npm test` | 19/19 node:test unit tests pass |
+| `npm run lint` | ESLint clean |
+
+`tests/test_frontend_logic.py` also runs the node:test suite, `node --check`
+and a check that every element `app.js` looks up exists in `index.html` when
+Node is installed. CI (`.github/workflows/ci.yml`): a `test` job on Ubuntu /
+Python 3.12 and Windows / Python 3.14 with CPU torch (`PIXELFLOW_REQUIRE_HUB=1`,
+`-rs`), and a `frontend` job (Ubuntu, Node 22) running ESLint, the unit tests
+and the Playwright smoke test. `release.yml` calls `ci.yml` first.
 
 ## Known limitations
 

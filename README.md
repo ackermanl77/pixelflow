@@ -109,7 +109,7 @@ push or a real release at all, which just builds and uploads the artifact.
 - **image**: Empty Image, Resize, Blur, Brightness/Contrast, Hue/Saturation,
   Blend, Text Overlay — real, CPU-only, Pillow-based operations
 - **output**: Preview Image (throwaway, `temp\`), Save Image (numbered
-  `prefix_00001_.png`, subfolders, `%date%`/`%seed%` tokens)
+  `prefix_00001_.png`, subfolders, `%date%`/`%time%`/`%seed%`/`%model%` tokens)
 
 Adding a new node is a single Python class — see `docs/NODE_AUTHORING.md`.
 

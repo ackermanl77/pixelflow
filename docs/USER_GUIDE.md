@@ -256,7 +256,8 @@ the model, seed, sampler, steps, cfg and prompt, and offers:
 
 ## Undo, redo, and finding your way around
 
-- **Undo** / **Redo** (<kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd>) step through
+- **Undo** / **Redo** (<kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd> or
+  <kbd>Ctrl+Shift+Z</kbd>) step through
   your recent edits — adding/removing nodes, connecting/disconnecting,
   moving nodes and changing values (last 100 steps). While you type in a
   text field, <kbd>Ctrl+Z</kbd> undoes your typing instead.
@@ -291,6 +292,17 @@ folder with `pixelflow.log` (useful when reporting a problem).
 Its KSampler is set to 4 steps and cfg 0, which is what the default
 `stabilityai/sd-turbo` checkpoint is designed for; raise them (e.g. 20–30
 steps, cfg ~7) for a regular SD checkpoint.
+
+## Test mode (trying the UI without a model)
+
+Started with the environment variable `PIXELFLOW_TEST_MODE=1` (for example
+`python tests/e2e/server.py`, which also uses a throwaway data folder in your
+temp directory, then open http://127.0.0.1:8299), PixelFlow starts in about a
+second without loading torch: the System panel shows "test mode", any graph
+that loads a checkpoint fails with a clear "model loading is disabled in test
+mode" error, and graphs made only of image nodes (Empty Image → Blur → Save
+Image, …) run normally. It's what the automated browser test uses; leave it
+off for real work.
 
 ## Troubleshooting
 

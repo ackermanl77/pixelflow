@@ -14,7 +14,7 @@ param(
     # local rebuilds; never used by CI).
     [switch]$ReuseVenv,
     # PyTorch wheel index torch is installed from before requirements.txt (PyPI's Windows torch
-    # wheel is CPU-only). cu130 matches the last shipped build (torch 2.14.0+cu130) and needs an
+    # wheel is CPU-only). cu130 matches the last shipped build (torch 2.14.1+cu130) and needs an
     # NVIDIA driver >= 580; RTX 50-series (sm_120) needs CUDA 12.8 or newer either way. If torch is
     # already installed (only possible with -ReuseVenv), pip leaves it alone -- the guard below
     # still checks what's there. Pass "" to skip this step (e.g. with -AllowCpu).
