@@ -43,6 +43,11 @@
       <div id="node-search-empty" class="hidden">No nodes match your search.</div>
     </aside>
 
+    <div class="splitter" data-panel="sidebar" role="separator" aria-orientation="vertical" tabindex="0"
+         aria-label="Node library width: drag or Left/Right arrows; Enter collapses it" title="Drag to resize; double-click or Enter to collapse">
+      <button class="splitter-toggle" tabindex="-1" aria-hidden="true">‹</button>
+    </div>
+
     <div id="canvas-wrap">
       <canvas id="graph-canvas" aria-label="Node graph editor"></canvas>
       <div id="empty-state">
@@ -57,6 +62,11 @@
           <div id="progress-track" class="progress-track" role="progressbar" aria-label="Current node" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill" class="progress-fill"></div></div>
         </div>
       </div>
+    </div>
+
+    <div class="splitter" data-panel="rightpanel" role="separator" aria-orientation="vertical" tabindex="0"
+         aria-label="Queue and gallery width: drag or Left/Right arrows; Enter collapses it" title="Drag to resize; double-click or Enter to collapse">
+      <button class="splitter-toggle" tabindex="-1" aria-hidden="true">›</button>
     </div>
 
     <aside id="rightpanel" aria-label="Queue and gallery">
@@ -136,6 +146,7 @@
         <tr><td><kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>Open the workflow manager</td></tr>
         <tr><td><kbd>Ctrl</kbd>+<kbd>M</kbd></td><td>Mute / unmute the selected nodes</td></tr>
         <tr><td><kbd>Ctrl</kbd>+<kbd>B</kbd></td><td>Bypass / un-bypass the selected nodes</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>G</kbd></td><td>Group the selected nodes (right-click the group's title: mute / bypass group, edit, remove)</td></tr>
         <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous / next image in the viewer</td></tr>
         <tr><td><kbd>Esc</kbd></td><td>Close a dialog or the image viewer</td></tr>
         <tr><td><kbd>?</kbd></td><td>This list</td></tr>

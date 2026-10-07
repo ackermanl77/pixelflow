@@ -93,6 +93,29 @@ button.primary:hover { background: var(--accent-hover); }
   border-left: 1px solid var(--border);
 }
 
+/* Resizable, collapsible side panels (F17). */
+.splitter {
+  position: relative;
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--bg);
+}
+.splitter:hover, .splitter:focus-visible, .splitter.dragging { background: var(--accent); outline: none; }
+.splitter-toggle {
+  position: absolute;
+  top: 50%;
+  left: -7px;
+  width: 20px;
+  height: 36px;
+  padding: 0;
+  transform: translateY(-50%);
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1;
+  z-index: 2;
+}
+#sidebar.collapsed, #rightpanel.collapsed { display: none; }
+
 #sidebar h3, #rightpanel h3 {
   margin: 4px 0 8px;
   font-size: 11px;

@@ -81,3 +81,17 @@ test("only image files are accepted for drop/paste (F2)", () => {
   assert.ok(!L.isImageFile({ type: "application/json" }));
   assert.ok(!L.isImageFile(null));
 });
+
+test("Ctrl+G groups; groupBounds wraps the boxes with padding and a title band", () => {
+  assert.equal(L.shortcutFor({ ctrlKey: true, key: "g" }), "group");
+  assert.equal(L.groupBounds([]), null);
+  assert.deepEqual(L.groupBounds([[100, 50, 200, 80], [400, 200, 100, 60]], 10, 34), [90, 6, 420, 264]);
+});
+
+test("side panel widths stay within 160-520 px and a third of the window (F17)", () => {
+  assert.equal(L.clampPanelWidth(300), 300);
+  assert.equal(L.clampPanelWidth(50), 160);
+  assert.equal(L.clampPanelWidth(900), 520);
+  assert.equal(L.clampPanelWidth(500, 1200), 400);
+  assert.equal(L.clampPanelWidth("junk"), 160);
+});

@@ -38,6 +38,7 @@ module.exports = [
         LiteGraph: "readonly",
         LGraph: "readonly",
         LGraphCanvas: "readonly",
+        LGraphGroup: "readonly",
         LGraphNode: "readonly",
         // logic.js is UMD: CommonJS under Node (the unit tests), a global in the browser.
         module: "readonly",

@@ -429,9 +429,34 @@
     if (mod && key === "o") return "open";
     if (mod && key === "m") return "mute";
     if (mod && key === "b") return "bypass";
+    if (mod && key === "g") return "group";
     if (!mod && !e.altKey && e.key === "?") return "help";
     if (!mod && e.key === "Escape") return "escape";
     return null;
+  }
+
+  /**
+   * The [x, y, width, height] of a group around node bounding boxes (each
+   * [x, y, w, h], title bar included), with `padding` all round and room for
+   * the group's own title band on top (F18). litegraph counts a node as inside
+   * a group only when its whole box fits, so the padding must stay positive.
+   */
+  function groupBounds(boxes, padding = 10, titleHeight = 34) {
+    if (!boxes.length) return null;
+    const left = Math.min(...boxes.map((b) => b[0]));
+    const top = Math.min(...boxes.map((b) => b[1]));
+    const right = Math.max(...boxes.map((b) => b[0] + b[2]));
+    const bottom = Math.max(...boxes.map((b) => b[1] + b[3]));
+    return [left - padding, top - padding - titleHeight, right - left + 2 * padding, bottom - top + 2 * padding + titleHeight];
+  }
+
+  const PANEL_MIN_WIDTH = 160;
+  const PANEL_MAX_WIDTH = 520;
+
+  /** A side panel's width (F17), kept within [160, 520] px and a third of the window. */
+  function clampPanelWidth(width, windowWidth = Infinity) {
+    const max = Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, windowWidth / 3));
+    return Math.round(Math.max(PANEL_MIN_WIDTH, Math.min(max, Number(width) || PANEL_MIN_WIDTH)));
   }
 
   /** Undo stack push with a cap (F6): returns the new [stack, index]. */
@@ -477,5 +502,7 @@
     isTypingTarget,
     shortcutFor,
     pushUndo,
+    groupBounds,
+    clampPanelWidth,
   };
 });

@@ -329,6 +329,47 @@ function selectedNodes() {
   return Object.values(canvas.selected_nodes || {});
 }
 
+// ---- Groups (F18; Ctrl+G is F14's last shortcut) ----
+
+function groupSelected() {
+  const nodes = selectedNodes();
+  if (!nodes.length) {
+    showToast("Select the nodes to group first (Ctrl+click or drag a selection box).");
+    return null;
+  }
+  const bounds = Logic.groupBounds(nodes.map((node) => Array.from(node.getBounding())));
+  const group = new LGraphGroup("Group");
+  group.pos = [bounds[0], bounds[1]];
+  group.size = [bounds[2], bounds[3]];
+  graph.add(group);
+  canvas.setDirty(true, true);
+  scheduleHistoryPush();
+  return group;
+}
+
+function nodesInGroup(group) {
+  group.recomputeInsideNodes();
+  return group._nodes.slice();
+}
+
+// The group's context menu ("Edit Group") gains mute/bypass for everything in it.
+const baseGroupMenuOptions = LGraphCanvas.prototype.getGroupMenuOptions;
+LGraphCanvas.prototype.getGroupMenuOptions = function (group) {
+  return [
+    { content: "Mute group", callback: () => toggleMode(nodesInGroup(group), Logic.MODE_MUTE) },
+    { content: "Bypass group", callback: () => toggleMode(nodesInGroup(group), Logic.MODE_BYPASS) },
+    {
+      content: "Select nodes",
+      callback: () => {
+        canvas.selectNodes(nodesInGroup(group));
+        canvas.setDirty(true, true);
+      },
+    },
+    null,
+    ...baseGroupMenuOptions.call(this, group),
+  ];
+};
+
 async function loadNodeDefs() {
   const res = await fetch("/api/nodes");
   nodeDefs = await res.json();
@@ -1581,6 +1622,7 @@ function handleShortcut(e) {
     open: openWorkflowManager,
     mute: () => toggleMode(selectedNodes(), Logic.MODE_MUTE),
     bypass: () => toggleMode(selectedNodes(), Logic.MODE_BYPASS),
+    group: groupSelected,
     help: () => openOverlay("help-overlay"),
     escape: () => {},
   };
@@ -1593,7 +1635,92 @@ function queueCount() {
   return Number.isFinite(value) ? Math.max(1, Math.min(100, value)) : 1;
 }
 
+// ---- Side panels (F17): resizable and collapsible, remembered per browser ----
+
+const PANEL_STORAGE_KEY = "pixelflow.panels";
+
+function loadPanelState() {
+  try {
+    return JSON.parse(localStorage.getItem(PANEL_STORAGE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function savePanelState(state) {
+  try {
+    localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Storage blocked (private window): the layout just isn't remembered.
+  }
+}
+
+function applyPanel(id, { width, collapsed }) {
+  const panel = document.getElementById(id);
+  const splitter = document.querySelector(`.splitter[data-panel="${id}"]`);
+  if (width) panel.style.width = `${Logic.clampPanelWidth(width, window.innerWidth)}px`;
+  panel.classList.toggle("collapsed", !!collapsed);
+  const toggle = splitter.querySelector(".splitter-toggle");
+  const opensLeft = id === "sidebar";
+  toggle.textContent = collapsed === opensLeft ? "›" : "‹";
+  splitter.setAttribute("aria-valuenow", collapsed ? 0 : Math.round(panel.getBoundingClientRect().width));
+  resizeCanvas();
+}
+
+function setPanel(id, changes) {
+  const state = loadPanelState();
+  state[id] = { ...(state[id] || {}), ...changes };
+  applyPanel(id, state[id]);
+  savePanelState(state);
+}
+
+function togglePanel(id) {
+  setPanel(id, { collapsed: !document.getElementById(id).classList.contains("collapsed") });
+}
+
+function initPanels() {
+  const state = loadPanelState();
+  for (const splitter of document.querySelectorAll(".splitter")) {
+    const id = splitter.dataset.panel;
+    const panel = document.getElementById(id);
+    const sign = id === "sidebar" ? 1 : -1; // dragging right widens the left panel, narrows the right one
+    if (state[id]) applyPanel(id, state[id]);
+    splitter.querySelector(".splitter-toggle").addEventListener("click", (e) => {
+      e.stopPropagation();
+      togglePanel(id);
+    });
+    splitter.addEventListener("dblclick", () => togglePanel(id));
+    splitter.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        togglePanel(id);
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        const step = (e.key === "ArrowRight" ? 20 : -20) * sign;
+        setPanel(id, { collapsed: false, width: panel.getBoundingClientRect().width + step });
+      }
+    });
+    splitter.addEventListener("pointerdown", (e) => {
+      if (e.target.closest(".splitter-toggle") || panel.classList.contains("collapsed")) return;
+      const startX = e.clientX;
+      const startWidth = panel.getBoundingClientRect().width;
+      splitter.setPointerCapture(e.pointerId);
+      splitter.classList.add("dragging");
+      const move = (ev) => applyPanel(id, { width: startWidth + (ev.clientX - startX) * sign });
+      const up = (ev) => {
+        splitter.removeEventListener("pointermove", move);
+        splitter.removeEventListener("pointerup", up);
+        splitter.classList.remove("dragging");
+        setPanel(id, { width: startWidth + (ev.clientX - startX) * sign });
+      };
+      splitter.addEventListener("pointermove", move);
+      splitter.addEventListener("pointerup", up);
+    });
+  }
+}
+
 function initUI() {
+  initPanels();
   document.getElementById("btn-queue").onclick = (e) => queuePrompt({ front: e.shiftKey, count: queueCount() });
   document.getElementById("btn-example").onclick = loadExampleGraph;
   document.getElementById("btn-templates").onclick = openTemplates;

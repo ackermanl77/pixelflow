@@ -51,6 +51,11 @@ Either way, you get the same interface described below.
 - **System** (top-right corner) — your GPU and its memory use; click it for
   details.
 
+The bars between the side panels and the canvas resize them: drag one, or
+click it and use <kbd>←</kbd>/<kbd>→</kbd>. Its small arrow button (or a
+double-click, or <kbd>Enter</kbd>) collapses that panel to give the canvas the
+whole width, and brings it back. The layout is remembered in this browser.
+
 ## Building a graph
 
 1. **Add a node** — click or drag a node from the sidebar, or right-click
@@ -70,6 +75,11 @@ Either way, you get the same interface described below.
    of the run, and so is anything that only it feeds. A *bypassed* node
    (purple) is skipped but its input is passed straight through to whatever
    it was feeding (e.g. bypass a Blur to compare with and without it).
+7. **Group nodes** — select several (Ctrl+click, or Ctrl+drag a box) and
+   press <kbd>Ctrl+G</kbd>: a titled frame is drawn around them and moves
+   them together. Right-click the group's title for **Mute group**, **Bypass
+   group**, **Select nodes**, and **Edit Group** (title, colour, remove).
+   Groups are saved with the workflow.
 
 ## Running a graph
 

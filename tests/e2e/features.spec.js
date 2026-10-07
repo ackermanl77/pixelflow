@@ -38,3 +38,65 @@ test("templates: every one builds its graph, wired as its file says", async ({ p
     "LoadCheckpoint,CLIPTextEncode,EmptyImage,KSampler,SaveImage",
   );
 });
+
+test("groups: Ctrl+G wraps the selection, and the group menu mutes and bypasses it", async ({ page }) => {
+  await page.click("#btn-example");
+  await expect.poll(() => page.evaluate(() => graph._nodes.length)).toBe(5);
+  await page.evaluate(() => {
+    const picked = graph._nodes.filter((n) => ["CLIPTextEncode", "EmptyImage"].includes(n.comfyClass));
+    canvas.selectNodes(picked);
+  });
+  await page.locator("#graph-canvas").focus();
+  await page.keyboard.press("Control+g");
+  const group = await page.evaluate(() => {
+    const g = graph._groups[0];
+    g.recomputeInsideNodes();
+    return { count: graph._groups.length, inside: g._nodes.map((n) => n.comfyClass).sort() };
+  });
+  expect(group).toEqual({ count: 1, inside: ["CLIPTextEncode", "EmptyImage"] });
+
+  // The group's context menu (Edit Group) leads with Mute / Bypass / Select.
+  const labels = await page.evaluate(() => canvas.getGroupMenuOptions(graph._groups[0]).filter(Boolean).map((o) => o.content));
+  expect(labels.slice(0, 3)).toEqual(["Mute group", "Bypass group", "Select nodes"]);
+  await page.evaluate(() => canvas.getGroupMenuOptions(graph._groups[0])[0].callback());
+  const modes = await page.evaluate(() => graph._nodes.map((n) => [n.comfyClass, n.mode]));
+  for (const [cls, mode] of modes) expect(mode, cls).toBe(["CLIPTextEncode", "EmptyImage"].includes(cls) ? 2 : 0);
+
+  // Groups are part of the saved graph.
+  const saved = await page.evaluate(() => graph.serialize().groups.length);
+  expect(saved).toBe(1);
+});
+
+test("side panels resize and collapse, and the canvas follows; the layout is remembered", async ({ page }) => {
+  const width = (sel) => page.evaluate((s) => document.querySelector(s).getBoundingClientRect().width, sel);
+  const canvasWidth = () => page.evaluate(() => document.getElementById("graph-canvas").width);
+  const before = await width("#sidebar");
+  const splitter = page.locator('.splitter[data-panel="sidebar"]');
+  await splitter.focus();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  expect(await width("#sidebar")).toBe(before + 40);
+
+  // Drag the right panel's splitter 100 px to the left: that panel widens.
+  const right = page.locator('.splitter[data-panel="rightpanel"]');
+  const box = await right.boundingBox();
+  const rightBefore = await width("#rightpanel");
+  await page.mouse.move(box.x + 3, box.y + 40);
+  await page.mouse.down();
+  await page.mouse.move(box.x - 97, box.y + 40, { steps: 5 });
+  await page.mouse.up();
+  expect(await width("#rightpanel")).toBe(rightBefore + 100);
+
+  const canvasBefore = await canvasWidth();
+  await splitter.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#sidebar")).toBeHidden();
+  expect(await canvasWidth()).toBeGreaterThan(canvasBefore);
+
+  await page.reload();
+  await expect(page.locator("#sidebar")).toBeHidden();
+  expect(await width("#rightpanel")).toBe(rightBefore + 100);
+  await page.locator('.splitter[data-panel="sidebar"] .splitter-toggle').click();
+  await expect(page.locator("#sidebar")).toBeVisible();
+  expect(await width("#sidebar")).toBe(before + 40);
+});
