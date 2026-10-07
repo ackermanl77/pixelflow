@@ -103,6 +103,8 @@ push or a real release at all, which just builds and uploads the artifact.
   as a MASK), Load Mask, Load ControlNet (`models/controlnet/` or a Hub id)
 - **ControlNet**: Apply ControlNet (strength and start/end; chainable; works
   with all three samplers), Canny Edges preprocessing
+- **Upscaling**: Load Upscale Model + Upscale Image (model) -- ESRGAN-family
+  models via spandrel, tiled on the GPU
 - **conditioning**: CLIP Text Encode (`(word:1.2)` weighting, long prompts,
   clip skip)
 - **sampling**: KSampler (txt2img), KSampler (Image) (img2img / hires fix),

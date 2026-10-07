@@ -14,6 +14,9 @@ hiddenimports += collect_submodules("backend")
 packages = ["uvicorn", "webview", "torch", "diffusers", "transformers", "accelerate", "safetensors"]
 if importlib.util.find_spec("peft") is not None:
     packages.append("peft")
+# spandrel (model upscalers) registers its architectures by importing them; collect them all.
+if importlib.util.find_spec("spandrel") is not None:
+    packages.append("spandrel")
 for package in packages:
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas

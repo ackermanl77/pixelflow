@@ -1,4 +1,4 @@
 from .base import NODE_ALIASES, NODE_REGISTRY, NodeBase, register_node, resolve_class_type
-from . import io_nodes, image_ops, generation, controlnet  # noqa: F401  (side-effect: registers nodes)
+from . import io_nodes, image_ops, generation, controlnet, upscale  # noqa: F401  (side-effect: registers nodes)
 
 __all__ = ["NODE_ALIASES", "NODE_REGISTRY", "NodeBase", "register_node", "resolve_class_type"]

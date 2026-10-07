@@ -171,6 +171,13 @@ re-create any single image of a batch.
   the steps). Chain several for several ControlNets; every sampler (txt2img,
   image and inpaint) follows them. The **ControlNet (Canny)** template wires
   this up.
+- **Load Upscale Model** — a super-resolution model from
+  `models\upscale_models\` (`.pth`/`.safetensors`: ESRGAN, Real-ESRGAN,
+  SwinIR, HAT and others the `spandrel` package recognises, e.g.
+  RealESRGAN_x4plus.pth). **Upscale Image (model)** (image) enlarges an
+  IMAGE with it (2x/4x as trained), in tiles so big images fit in VRAM —
+  e.g. 512 → 2048 px in under half a second on an RTX 5080. Re-sample the
+  result at low denoise for a hires fix, or Resize Image to another size.
 - **Canny Edges** (image) — white-on-black edges, the control image a Canny
   ControlNet expects; `low`/`high` (default 100/200, OpenCV's scale) keep
   more or fewer edges.
