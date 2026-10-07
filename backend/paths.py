@@ -93,6 +93,7 @@ TEMP_DIR = ROOT_DIR / "temp"
 MODELS_DIR = resolve_models_dir(ROOT_DIR)
 CHECKPOINT_DIR = MODELS_DIR / "checkpoints"
 LORA_DIR = MODELS_DIR / "loras"
+CONTROLNET_DIR = MODELS_DIR / "controlnet"
 # Finished prompts, one JSON object per line (see engine/queue.py).
 HISTORY_PATH = ROOT_DIR / "history.jsonl"
 # Rotating log files (see backend/logging_setup.py); created on first use.
@@ -102,7 +103,7 @@ LOG_DIR = ROOT_DIR / "logs"
 def ensure_data_dirs() -> None:
     """Create the data folders. Failures are logged, not raised: a
     read-only location must not stop the server from starting."""
-    for folder in (OUTPUT_DIR, UPLOAD_DIR, WORKFLOW_DIR, TEMP_DIR, CHECKPOINT_DIR, LORA_DIR):
+    for folder in (OUTPUT_DIR, UPLOAD_DIR, WORKFLOW_DIR, TEMP_DIR, CHECKPOINT_DIR, LORA_DIR, CONTROLNET_DIR):
         try:
             folder.mkdir(parents=True, exist_ok=True)
         except OSError:

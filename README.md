@@ -100,7 +100,9 @@ push or a real release at all, which just builds and uploads the artifact.
 - **loaders**: Load Checkpoint (installed-model dropdown or any Hub id;
   SD 1.x/2.x, SDXL, SD3, Flux; precision option), Load LoRA, Load Image
   (upload button, drag-and-drop or paste; outputs the image and its alpha
-  as a MASK), Load Mask
+  as a MASK), Load Mask, Load ControlNet (`models/controlnet/` or a Hub id)
+- **ControlNet**: Apply ControlNet (strength and start/end; chainable; works
+  with all three samplers), Canny Edges preprocessing
 - **conditioning**: CLIP Text Encode (`(word:1.2)` weighting, long prompts,
   clip skip)
 - **sampling**: KSampler (txt2img), KSampler (Image) (img2img / hires fix),

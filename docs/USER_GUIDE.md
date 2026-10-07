@@ -158,6 +158,20 @@ re-create any single image of a batch.
   are the ones inpainting repaints). Phone photos are rotated upright.
 - **Load Mask** — a grayscale upload as a `MASK` (white = repaint), or its
   alpha channel; `invert` flips it.
+- **Load ControlNet** — a ControlNet from `models\controlnet\` (a diffusers
+  folder with its `config.json`, or a single `.safetensors` file) or any Hub
+  repo id, as a `CONTROL_NET`. It must match the checkpoint's family: for the
+  default sd-turbo (SD 2.1), e.g. `thibaud/controlnet-sd21-canny-diffusers`;
+  for SD 1.5, `lllyasviel/sd-controlnet-canny`; SDXL ControlNets for SDXL.
+- **Apply ControlNet** (conditioning) — attaches a `CONTROL_NET` and its
+  control image (e.g. **Canny Edges** of a photo) to the positive
+  `CONDITIONING` with a `strength` (0–2) and a `start`/`end` window (share of
+  the steps). Chain several for several ControlNets; every sampler (txt2img,
+  image and inpaint) follows them. The **ControlNet (Canny)** template wires
+  this up.
+- **Canny Edges** (image) — white-on-black edges, the control image a Canny
+  ControlNet expects; `low`/`high` (default 100/200, OpenCV's scale) keep
+  more or fewer edges.
 
 ### conditioning
 

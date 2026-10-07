@@ -43,6 +43,8 @@ def isolated_data_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "MODELS_DIR", models_dir)
     monkeypatch.setattr(paths, "CHECKPOINT_DIR", dirs["checkpoints"])
     monkeypatch.setattr(paths, "LORA_DIR", dirs["loras"])
+    dirs["controlnet"] = models_dir / "controlnet"
+    monkeypatch.setattr(paths, "CONTROLNET_DIR", dirs["controlnet"])
     monkeypatch.setattr(paths, "LOG_DIR", tmp_path / "logs")
     for name, key in (("OUTPUT_DIR", "outputs"), ("UPLOAD_DIR", "uploads"), ("WORKFLOW_DIR", "workflows"), ("TEMP_DIR", "temp")):
         monkeypatch.setattr(paths, name, dirs[key])

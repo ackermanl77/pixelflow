@@ -1,0 +1,23 @@
+{
+  "nodes": [
+    {"id": "ckpt", "type": "LoadCheckpoint", "pos": [50, 140]},
+    {"id": "prompt", "type": "CLIPTextEncode", "pos": [320, 20], "values": {"text": "a futuristic glass building at dusk"}},
+    {"id": "image", "type": "LoadImage", "pos": [50, 380]},
+    {"id": "edges", "type": "CannyEdges", "pos": [380, 420]},
+    {"id": "cn", "type": "ControlNetLoader", "pos": [380, 260], "values": {"control_net_name": "thibaud/controlnet-sd21-canny-diffusers"}},
+    {"id": "apply", "type": "ControlNetApply", "pos": [700, 140]},
+    {"id": "empty", "type": "EmptyImage", "pos": [700, 420]},
+    {"id": "sampler", "type": "KSampler", "pos": [1020, 140], "values": {"steps": 4, "cfg": 0}},
+    {"id": "save", "type": "SaveImage", "pos": [1340, 140]}
+  ],
+  "links": [
+    ["image", 0, "edges", "image"],
+    ["prompt", 0, "apply", "conditioning"],
+    ["cn", 0, "apply", "control_net"],
+    ["edges", 0, "apply", "image"],
+    ["ckpt", 0, "sampler", "model"],
+    ["apply", 0, "sampler", "positive"],
+    ["empty", 0, "sampler", "latent_image"],
+    ["sampler", 0, "save", "image"]
+  ]
+}

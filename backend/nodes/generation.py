@@ -7,7 +7,7 @@ import weakref
 
 from PIL import Image
 
-from . import latent_preview, models, prompt_weights, runtime
+from . import controlnet, latent_preview, models, prompt_weights, runtime
 from .base import NodeBase, as_image_list, first_image, register_node
 from .io_nodes import MODEL_INFO_KEY, NODE_INFO_KEY, SEED_INFO_KEY
 
@@ -515,6 +515,9 @@ class KSampler(NodeBase):
         # latent_image may be a batch (e.g. another KSampler's output); only
         # its size matters here.
         width, height = _snap8(first_image(latent_image).size)
+        controls = controlnet.controls_of(positive)
+        if controls:  # B7: the ControlNet variant of the pipeline, base weights shared
+            pipe = controlnet.control_pipeline(pipe, "text2img", controls)
         call_kwargs = {
             **_prompt_kwargs(model, pipe, positive, negative, 1),
             "width": width,
@@ -523,6 +526,8 @@ class KSampler(NodeBase):
             "guidance_scale": float(cfg),
             "num_images_per_prompt": int(batch_size),
         }
+        if controls:
+            call_kwargs.update(controlnet.control_kwargs("text2img", controls, (width, height)))
         return _run_diffusion(
             pipe,
             sampler,
@@ -592,7 +597,11 @@ class KSamplerImage(NodeBase):
         on_progress=None,
     ):
         effective_steps = _denoise_steps(steps, denoise)
-        pipe = derived_pipeline(model["pipeline"], "img2img")
+        controls = controlnet.controls_of(positive)
+        if controls:
+            pipe = controlnet.control_pipeline(model["pipeline"], "img2img", controls)
+        else:
+            pipe = derived_pipeline(model["pipeline"], "img2img")
         images, (width, height) = _source_images(image)
         call_kwargs = {
             **_prompt_kwargs(model, pipe, positive, negative, len(images)),
@@ -602,6 +611,8 @@ class KSamplerImage(NodeBase):
             "guidance_scale": float(cfg),
             "num_images_per_prompt": int(batch_size),
         }
+        if controls:
+            call_kwargs.update(controlnet.control_kwargs("img2img", controls, (width, height)))
         return _run_diffusion(
             pipe,
             sampler,
@@ -667,7 +678,11 @@ class KSamplerInpaint(NodeBase):
         on_progress=None,
     ):
         effective_steps = _denoise_steps(steps, denoise)
-        pipe = derived_pipeline(model["pipeline"], "inpaint")
+        controls = controlnet.controls_of(positive)
+        if controls:
+            pipe = controlnet.control_pipeline(model["pipeline"], "inpaint", controls)
+        else:
+            pipe = derived_pipeline(model["pipeline"], "inpaint")
         images, (width, height) = _source_images(image)
         masks = [m.convert("L") for m in as_image_list(mask)]
         if len(masks) == 1:
@@ -686,6 +701,8 @@ class KSamplerInpaint(NodeBase):
             "guidance_scale": float(cfg),
             "num_images_per_prompt": int(batch_size),
         }
+        if controls:
+            call_kwargs.update(controlnet.control_kwargs("inpaint", controls, (width, height)))
         return _run_diffusion(
             pipe,
             sampler,
