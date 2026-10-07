@@ -155,8 +155,9 @@ This mirrors the sibling `photo_professional_tool` project's
    machine having WebView2 installed at all.** Then writes
    `release\build-info.json` (version, git SHA, build time, Python, torch,
    torch CUDA, diffusers, transformers) so a shipped build can be identified.
-7. Optionally code-signs the exe (`-Sign -CertificateThumbprint <sha1>`); a
-   failing `signtool` stops the build. Without `-Sign` this step is skipped
+7. Optionally code-signs the exe (`-Sign -CertificateThumbprint <sha1>`, or `-Sign` with the
+   thumbprint in `CODESIGN_THUMBPRINT`; `CODESIGN_TIMESTAMP_URL` overrides the DigiCert
+   timestamp server); a failing `signtool` stops the build. Without `-Sign` this step is skipped
    silently. With `-Sign`, a missing thumbprint or a missing `signtool` (looked
    up on `PATH`, then in the newest `Windows Kits\10\bin\10.*\x64`) fails at
    the start instead of after the build.

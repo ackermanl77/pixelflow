@@ -62,7 +62,7 @@ def test_version_is_stamped_and_signing_is_checked():
     assert "$CertificateThumbprint" in BUILD and "$CertificateSubject" not in BUILD
     sign = BUILD.index("& $SignTool sign")
     assert "$LASTEXITCODE" in BUILD[sign : sign + 400], "a failed signature must stop the build"
-    required = BUILD.index("-CertificateThumbprint is required when -Sign is used.")
+    required = BUILD.index("-Sign needs -CertificateThumbprint (or the CODESIGN_THUMBPRINT environment variable).")
     assert required < BUILD.index("-m PyInstaller"), "a missing thumbprint must fail before the build"
     assert "SIGNING_CERT_PFX" in RELEASE
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()

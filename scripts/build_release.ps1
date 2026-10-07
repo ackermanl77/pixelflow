@@ -115,9 +115,13 @@ if (-not $Python -or -not (Test-Path $Python)) {
     throw "Base Python interpreter not found. Install Python 3.14 (or put python on PATH, or pass -Python <path>)."
 }
 # Check the signing setup before the multi-minute build, not after it.
+$TimestampUrl = if ($env:CODESIGN_TIMESTAMP_URL) { $env:CODESIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
 if ($Sign) {
+    # CODESIGN_THUMBPRINT is the variable every project's build on this machine reads.
+    if ([string]::IsNullOrWhiteSpace($CertificateThumbprint)) { $CertificateThumbprint = "$env:CODESIGN_THUMBPRINT" }
+    $CertificateThumbprint = $CertificateThumbprint -replace "\s", ""
     if ([string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
-        throw "-CertificateThumbprint is required when -Sign is used."
+        throw "-Sign needs -CertificateThumbprint (or the CODESIGN_THUMBPRINT environment variable)."
     }
     # signtool ships with the Windows SDK, which doesn't put it on PATH (GitHub's windows-latest
     # runners included): fall back to the newest SDK's x64 copy.
@@ -251,7 +255,7 @@ json.dump({
 
     if ($Sign) {
         $exe = Join-Path $ReleaseFolder "PixelFlow.exe"
-        & $SignTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $exe
+        & $SignTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 $exe
         if ($LASTEXITCODE -ne 0) { throw "signtool failed (exit code $LASTEXITCODE) -- the release is not signed." }
     }
 
