@@ -1407,40 +1407,85 @@ function setNodeValue(node, name, value) {
   if (widget) widget.value = value;
 }
 
-async function loadExampleGraph() {
-  if (isDirty() && !(await confirmModal("Unsaved changes", "Load the example? Your unsaved changes will be lost.", "Load example"))) {
-    return;
-  }
+// ---- Templates (F18): read-only starter graphs under frontend/templates/ ----
+
+// A template is {nodes: [{id, type, pos, values}], links: [[from id, output slot,
+// to id, input name]]} -- node ids are the template's own names, so the files stay
+// readable and independent of litegraph's serialization.
+function buildTemplateGraph(spec) {
   graph.clear();
   outputPreviews.clear();
-
-  const ckpt = addNodeToGraph("LoadCheckpoint", [50, 120]);
-
-  const clip = addNodeToGraph("CLIPTextEncode", [320, 40]);
-  setNodeValue(clip, "text", "a scenic mountain lake at sunrise, cinematic lighting");
-
-  const empty = addNodeToGraph("EmptyImage", [320, 260]);
-
-  // The default checkpoint (stabilityai/sd-turbo) is a distilled few-step
-  // model trained without classifier-free guidance: its model card uses
-  // 1-4 steps at guidance_scale 0 (diffusers skips CFG entirely at <= 1).
-  // KSampler's own 20-step / cfg 7 defaults are for regular SD checkpoints
-  // and give washed-out, slow results here.
-  const sampler = addNodeToGraph("KSampler", [640, 120]);
-  setNodeValue(sampler, "steps", 4);
-  setNodeValue(sampler, "cfg", 0);
-
-  const save = addNodeToGraph("SaveImage", [960, 120]);
-
-  ckpt.connect(0, sampler, findInputSlot(sampler, "model"));
-  clip.connect(0, sampler, findInputSlot(sampler, "positive"));
-  empty.connect(0, sampler, findInputSlot(sampler, "latent_image"));
-  sampler.connect(0, save, findInputSlot(save, "image"));
-
+  const nodes = new Map();
+  for (const entry of spec.nodes) {
+    const node = addNodeToGraph(entry.type, entry.pos);
+    if (!node) throw new Error(`unknown node type "${entry.type}"`);
+    for (const [name, value] of Object.entries(entry.values || {})) setNodeValue(node, name, value);
+    nodes.set(entry.id, node);
+  }
+  for (const [fromId, slot, toId, inputName] of spec.links) {
+    const target = nodes.get(toId);
+    const input = findInputSlot(target, inputName);
+    if (input < 0) throw new Error(`${toId} has no input "${inputName}"`);
+    nodes.get(fromId).connect(slot, target, input);
+  }
   canvas.setDirty(true, true);
   pushHistory();
   markSaved("");
   updateEmptyState();
+  fitView();
+}
+
+async function loadTemplate(file, title = file) {
+  if (isDirty() && !(await confirmModal("Unsaved changes", `Load the "${title}" template? Your unsaved changes will be lost.`, "Load template"))) {
+    return false;
+  }
+  try {
+    const res = await fetch(`templates/${file}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    buildTemplateGraph(await res.json());
+  } catch (err) {
+    showToast(`Couldn't load the template: ${err.message}`, "error");
+    return false;
+  }
+  return true;
+}
+
+// The default checkpoint (stabilityai/sd-turbo) is a distilled few-step model
+// trained without classifier-free guidance, so the starter graph uses 4 steps at
+// cfg 0 (KSampler's 20-step / cfg 7 defaults are for regular SD checkpoints).
+function loadExampleGraph() {
+  return loadTemplate("txt2img.json", "Text to image");
+}
+
+async function openTemplates() {
+  openOverlay("template-overlay");
+  const list = document.getElementById("template-list");
+  list.textContent = "Loading…";
+  try {
+    const res = await fetch("templates/index.json");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { templates } = await res.json();
+    list.textContent = "";
+    for (const template of templates) {
+      const button = document.createElement("button");
+      button.className = "template-item";
+      button.dataset.file = template.file;
+      const title = document.createElement("strong");
+      title.textContent = template.title;
+      const description = document.createElement("span");
+      description.textContent = template.description;
+      button.append(title, description);
+      button.onclick = async () => {
+        closeOverlay("template-overlay");
+        await loadTemplate(template.file, template.title);
+      };
+      list.append(button);
+    }
+    const first = list.querySelector("button");
+    if (first) first.focus();
+  } catch (err) {
+    list.textContent = `Couldn't list the templates: ${err.message}`;
+  }
 }
 
 // ---- System panel (B18; R2's "Open log folder") ----
@@ -1506,7 +1551,7 @@ async function openSystemPanel() {
 // ---- Wiring up UI ----
 
 function handleShortcut(e) {
-  for (const id of ["modal-overlay", "workflow-overlay", "system-overlay", "help-overlay"]) {
+  for (const id of ["modal-overlay", "workflow-overlay", "template-overlay", "system-overlay", "help-overlay"]) {
     const overlay = document.getElementById(id);
     if (!overlay.classList.contains("hidden")) {
       if (id !== "modal-overlay") trapFocus(overlay, e);
@@ -1551,6 +1596,8 @@ function queueCount() {
 function initUI() {
   document.getElementById("btn-queue").onclick = (e) => queuePrompt({ front: e.shiftKey, count: queueCount() });
   document.getElementById("btn-example").onclick = loadExampleGraph;
+  document.getElementById("btn-templates").onclick = openTemplates;
+  document.getElementById("template-close").onclick = () => closeOverlay("template-overlay");
   document.getElementById("btn-clear").onclick = async () => {
     if (isDirty() && !(await confirmModal("Clear the graph?", "Your unsaved changes will be lost.", "Clear"))) return;
     graph.clear();

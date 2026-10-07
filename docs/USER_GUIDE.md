@@ -30,7 +30,7 @@ Either way, you get the same interface described below.
 
 ```
 ┌──────────────────────────────────── Topbar ─────────────────────────────────────┐
-│ PixelFlow ● [Queue Prompt]×[1] │ [Workflows…][Save][Load Example][Clear]        │
+│ PixelFlow ● [Queue Prompt]×[1] │ [Workflows…][Save][Templates…][Load Example]   │
 │            [Export JSON][Import…] │ [Undo][Redo][Fit View][?]   GPU · VRAM used  │
 ├───────────┬───────────────────────────────────────┬─────────────────────────────┤
 │  Node     │                                       │  Queue  [Cancel all][Clear] │
@@ -285,9 +285,18 @@ folder with `pixelflow.log` (useful when reporting a problem).
   `{"models_dir": "D:/sd-models"}` in `settings.json` in the data folder)
   keeps big models somewhere else, e.g. on a drive OneDrive doesn't sync.
 
-## Load Example
+## Templates and Load Example
 
-**Load Example** builds a starter graph: Load Checkpoint → CLIP Text Encode
+**Templates…** lists read-only starter graphs (shipped as small JSON files in
+`frontend/templates/`): **Text to image**, **Image to image** (Load Image →
+img2img sampler), **Inpaint** (Load Image + Load Mask → inpaint sampler),
+**Hires fix** (generate at 512, resize to 1024, re-sample at 0.4 denoise) and
+**Upscale** (Load Image → 2× resize → light re-sample). Each is set up for the
+default sd-turbo checkpoint (few steps, cfg 0); upload an image/mask into the
+Load nodes and adjust the prompt. Loading one replaces the graph (it asks
+first when there are unsaved changes).
+
+**Load Example** is the Text to image template: Load Checkpoint → CLIP Text Encode: Load Checkpoint → CLIP Text Encode
 (with a sample prompt) → Empty Image → KSampler → Save Image, fully wired.
 Its KSampler is set to 4 steps and cfg 0, which is what the default
 `stabilityai/sd-turbo` checkpoint is designed for; raise them (e.g. 20–30

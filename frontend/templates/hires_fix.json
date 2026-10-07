@@ -1,0 +1,21 @@
+{
+  "nodes": [
+    {"id": "ckpt", "type": "LoadCheckpoint", "pos": [50, 160]},
+    {"id": "prompt", "type": "CLIPTextEncode", "pos": [320, 40], "values": {"text": "a cozy cabin in a snowy forest, detailed"}},
+    {"id": "empty", "type": "EmptyImage", "pos": [320, 280], "values": {"width": 512, "height": 512}},
+    {"id": "base", "type": "KSampler", "pos": [640, 40], "values": {"steps": 4, "cfg": 0}},
+    {"id": "resize", "type": "ImageResize", "pos": [960, 40], "values": {"width": 1024, "height": 1024}},
+    {"id": "refine", "type": "KSamplerImage", "pos": [960, 260], "values": {"steps": 8, "cfg": 0, "denoise": 0.4}},
+    {"id": "save", "type": "SaveImage", "pos": [1280, 260]}
+  ],
+  "links": [
+    ["ckpt", 0, "base", "model"],
+    ["prompt", 0, "base", "positive"],
+    ["empty", 0, "base", "latent_image"],
+    ["base", 0, "resize", "image"],
+    ["ckpt", 0, "refine", "model"],
+    ["prompt", 0, "refine", "positive"],
+    ["resize", 0, "refine", "image"],
+    ["refine", 0, "save", "image"]
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "nodes": [
+    {"id": "ckpt", "type": "LoadCheckpoint", "pos": [50, 120]},
+    {"id": "prompt", "type": "CLIPTextEncode", "pos": [320, 20], "values": {"text": "a watercolor painting, soft light"}},
+    {"id": "image", "type": "LoadImage", "pos": [320, 220]},
+    {"id": "sampler", "type": "KSamplerImage", "pos": [660, 120], "values": {"steps": 8, "cfg": 0, "denoise": 0.6}},
+    {"id": "save", "type": "SaveImage", "pos": [980, 120]}
+  ],
+  "links": [
+    ["ckpt", 0, "sampler", "model"],
+    ["prompt", 0, "sampler", "positive"],
+    ["image", 0, "sampler", "image"],
+    ["sampler", 0, "save", "image"]
+  ]
+}

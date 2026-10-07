@@ -1,0 +1,17 @@
+{
+  "nodes": [
+    {"id": "ckpt", "type": "LoadCheckpoint", "pos": [50, 160]},
+    {"id": "prompt", "type": "CLIPTextEncode", "pos": [320, 20], "values": {"text": "high detail, sharp focus"}},
+    {"id": "image", "type": "LoadImage", "pos": [50, 380]},
+    {"id": "resize", "type": "ImageResize", "pos": [380, 380], "values": {"width": 1024, "height": 1024}},
+    {"id": "refine", "type": "KSamplerImage", "pos": [700, 160], "values": {"steps": 8, "cfg": 0, "denoise": 0.3}},
+    {"id": "save", "type": "SaveImage", "pos": [1020, 160]}
+  ],
+  "links": [
+    ["ckpt", 0, "refine", "model"],
+    ["prompt", 0, "refine", "positive"],
+    ["image", 0, "resize", "image"],
+    ["resize", 0, "refine", "image"],
+    ["refine", 0, "save", "image"]
+  ]
+}

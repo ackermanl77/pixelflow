@@ -1,0 +1,15 @@
+{
+  "nodes": [
+    {"id": "ckpt", "type": "LoadCheckpoint", "pos": [50, 120]},
+    {"id": "prompt", "type": "CLIPTextEncode", "pos": [320, 40], "values": {"text": "a scenic mountain lake at sunrise, cinematic lighting"}},
+    {"id": "empty", "type": "EmptyImage", "pos": [320, 260]},
+    {"id": "sampler", "type": "KSampler", "pos": [640, 120], "values": {"steps": 4, "cfg": 0}},
+    {"id": "save", "type": "SaveImage", "pos": [960, 120]}
+  ],
+  "links": [
+    ["ckpt", 0, "sampler", "model"],
+    ["prompt", 0, "sampler", "positive"],
+    ["empty", 0, "sampler", "latent_image"],
+    ["sampler", 0, "save", "image"]
+  ]
+}

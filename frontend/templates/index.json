@@ -1,0 +1,9 @@
+{
+  "templates": [
+    {"file": "txt2img.json", "title": "Text to image", "description": "Prompt -> image with the default sd-turbo settings."},
+    {"file": "img2img.json", "title": "Image to image", "description": "Re-sample an uploaded image with a prompt."},
+    {"file": "inpaint.json", "title": "Inpaint", "description": "Repaint the white area of a mask on an uploaded image."},
+    {"file": "hires_fix.json", "title": "Hires fix", "description": "Generate small, upscale, then re-sample at low denoise for detail."},
+    {"file": "upscale.json", "title": "Upscale", "description": "Enlarge an uploaded image 2x and re-sample it lightly to add detail."}
+  ]
+}

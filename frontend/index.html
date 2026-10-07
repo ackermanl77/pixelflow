@@ -19,7 +19,8 @@
     <div class="group" role="group" aria-label="Workflow">
       <button id="btn-workflows" title="Workflows (Ctrl+O)">Workflows…</button>
       <button id="btn-save-workflow" title="Save Workflow (Ctrl+S)">Save</button>
-      <button id="btn-example">Load Example</button>
+      <button id="btn-templates" title="Starter graphs: text to image, image to image, inpaint, hires fix, upscale">Templates…</button>
+      <button id="btn-example" title="The text-to-image template">Load Example</button>
       <button id="btn-clear">Clear</button>
       <button id="btn-export">Export JSON</button>
       <label class="file-btn" title="Import a workflow .json, or a PNG made by PixelFlow / ComfyUI">Import…<input id="file-import" type="file" accept="application/json,.json,image/png" /></label>
@@ -93,6 +94,17 @@
       <div id="workflow-list" class="workflow-list"></div>
       <div class="modal-actions">
         <button id="workflow-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Templates (F18). -->
+  <div id="template-overlay" class="modal-overlay hidden">
+    <div class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="template-title">
+      <h3 id="template-title">Templates</h3>
+      <div id="template-list" class="template-list"></div>
+      <div class="modal-actions">
+        <button id="template-close">Close</button>
       </div>
     </div>
   </div>
