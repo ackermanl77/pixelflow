@@ -175,6 +175,52 @@ def choose_port(preferred: int = PORT) -> tuple[int, bool]:
     return fallback, True
 
 
+WINDOW_TITLE = "PixelFlow"
+
+
+def _focus_existing_window(title: str = WINDOW_TITLE) -> bool:
+    """Bring another process's top-level window titled exactly `title` (the
+    running PixelFlow) to the front, restoring it when minimized. True when
+    one was found. Windows only; elsewhere (and on any failure) False, and
+    the caller opens a window of its own instead."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        own_pid = os.getpid()
+        found: list[int] = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def visit(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            buffer = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buffer, length + 1)
+            if buffer.value == title:
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if pid.value != own_pid:
+                    found.append(hwnd)
+                    return False
+            return True
+
+        user32.EnumWindows(visit, 0)
+        if not found:
+            return False
+        hwnd = found[0]
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(hwnd)
+        return True
+    except Exception:  # noqa: BLE001 - never stop the launch over this
+        logger.debug("could not focus the running PixelFlow window", exc_info=True)
+        return False
+
+
 def _shutdown(thread: threading.Thread | None, timeout_s: float = 10.0) -> None:
     """Window closed: stop the running prompt at its next step, let uvicorn
     finish (so a PNG being written isn't cut off), and wait for it."""
@@ -204,11 +250,16 @@ def main() -> None:
         thread = threading.Thread(target=_run_server, args=(port,), daemon=True)
         thread.start()
         _wait_for_server(thread, port=port)
+    elif _focus_existing_window():
+        # A second launch (R5): bring the running PixelFlow's window forward instead
+        # of opening another window on the same server.
+        logger.info("PixelFlow is already running on port %d; focused its window", port)
+        return
     else:
-        logger.info("PixelFlow is already running on port %d; opening another window on it", port)
+        logger.info("PixelFlow is already running on port %d (no window of it found); opening a window on it", port)
 
     _configure_webview2_runtime()
-    webview.create_window("PixelFlow", _url(port), width=1440, height=960, min_size=(1024, 700))
+    webview.create_window(WINDOW_TITLE, _url(port), width=1440, height=960, min_size=(1024, 700))
     try:
         webview.start(gui="edgechromium")
     finally:

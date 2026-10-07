@@ -22,7 +22,9 @@ have one, CPU otherwise (slower, but it works).
   `python desktop.py` from source) — same app, opened in its own window
   instead of a browser tab. If port 8288 is taken by another program, the
   desktop app picks a free port; if PixelFlow is already running, a second
-  launch opens another window on the running one.
+  launch brings its window to the front (restoring it if minimized) instead
+  of starting again -- or, when that one has no window (started for a
+  browser), opens a window on it.
 
 Either way, you get the same interface described below.
 
