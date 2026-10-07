@@ -501,6 +501,57 @@ def use_channels_last(pipe) -> bool:
     return converted
 
 
+_compile_warned = False
+
+
+COMPILE_MODES = {"default": "default", "max-autotune": "max-autotune-no-cudagraphs"}
+
+
+def torch_compile_mode() -> str | None:
+    """Opt-in torch.compile (report item P3): {"torch_compile": true} in
+    settings.json (or PIXELFLOW_TORCH_COMPILE=1) compiles in the default mode;
+    "max-autotune" also benchmarks kernel variants -- a slower first compile
+    (measured ~4x on an RTX 5080) for a little more speed. None: off."""
+    value = os.environ.get("PIXELFLOW_TORCH_COMPILE")
+    if value is None:
+        value = paths.load_settings(paths.ROOT_DIR).get("torch_compile")
+    if value is True or str(value).strip().lower() in ("1", "true", "yes", "on", "default"):
+        return COMPILE_MODES["default"]
+    if str(value).strip().lower() == "max-autotune":
+        return COMPILE_MODES["max-autotune"]
+    return None
+
+
+def maybe_compile(pipe) -> bool:
+    """When enabled, wrap the UNet in torch.compile (inductor through Triton;
+    on Windows the optional triton-windows package, requirements-compile.txt).
+    The first run at each new size/batch compiles (minutes); later runs at
+    that size are faster. Compile errors fall back to eager execution
+    (dynamo's suppress_errors) instead of failing the run. Returns whether
+    the UNet is compiled."""
+    global _compile_warned
+    unet = getattr(pipe, "unet", None)
+    mode = torch_compile_mode()
+    if unet is None or mode is None:
+        return False
+    if hasattr(unet, "_orig_mod"):
+        return True  # already compiled (a pipeline moved back onto the GPU)
+    import importlib.util
+
+    if importlib.util.find_spec("triton") is None:
+        if not _compile_warned:
+            logger.warning("torch_compile is on but Triton isn't installed (pip install -r requirements-compile.txt); running uncompiled")
+            _compile_warned = True
+        return False
+    torch = runtime.torch()
+    import torch._dynamo
+
+    torch._dynamo.config.suppress_errors = True
+    pipe.unet = torch.compile(unet, mode=mode, fullgraph=False)
+    logger.info("UNet compiled with torch.compile (the first run at each size compiles; later runs are faster)")
+    return True
+
+
 class PipelineCache:
     def __init__(self) -> None:
         self.entries: "OrderedDict[Tuple[str, str, str], CacheEntry]" = OrderedDict()
@@ -521,6 +572,7 @@ class PipelineCache:
             return False
         if device == "cuda":
             use_channels_last(entry.pipe)
+            maybe_compile(entry.pipe)
         return True
 
     def _make_gpu_room(self, nbytes: int, budget: int, keep: Optional[Tuple] = None) -> None:

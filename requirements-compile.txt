@@ -1,0 +1,5 @@
+# Optional: opt-in torch.compile of the UNet ({"torch_compile": true} in settings.json, or
+# PIXELFLOW_TORCH_COMPILE=1). Linux torch wheels already bring Triton; on Windows it comes from
+# the community triton-windows build, whose release must match the installed torch (3.8 for
+# torch 2.14). Not part of the release bundle.
+triton-windows>=3.8,<3.9; sys_platform == "win32"

@@ -339,6 +339,14 @@ folder with `pixelflow.log` (useful when reporting a problem).
 - `PIXELFLOW_HOME` overrides the data folder; `PIXELFLOW_MODELS_DIR` (or
   `{"models_dir": "D:/sd-models"}` in `settings.json` in the data folder)
   keeps big models somewhere else, e.g. on a drive OneDrive doesn't sync.
+- **Faster repeated runs (advanced, from source)**: `{"torch_compile": true}` in
+  `settings.json` (or `PIXELFLOW_TORCH_COMPILE=1`) compiles the UNet with
+  `torch.compile`. On Windows it needs Triton:
+  `pip install -r requirements-compile.txt`. The first run at each new size or
+  batch size compiles first (tens of seconds, minutes for big models); later
+  runs at that size are faster. `"max-autotune"` instead of `true` compiles
+  even longer for a little more speed. Without Triton the setting is ignored
+  (the log says so).
 
 ## Templates and Load Example
 
