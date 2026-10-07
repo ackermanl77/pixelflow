@@ -672,11 +672,15 @@ async function submitPrompt(front) {
     return false;
   }
   const data = await res.json();
-  queueState.entries.set(data.prompt_id, { status: "queued", queued_at: Date.now() / 1000 });
-  if (front) queueState.pending.unshift(data.prompt_id);
-  else if (!queueState.pending.includes(data.prompt_id)) queueState.pending.push(data.prompt_id);
+  // A quick run's WebSocket messages can arrive before this response: don't
+  // turn its "running"/"completed" back into "queued".
+  if (!queueState.entries.has(data.prompt_id)) {
+    queueState.entries.set(data.prompt_id, { status: "queued", queued_at: Date.now() / 1000 });
+    if (front) queueState.pending.unshift(data.prompt_id);
+    else if (!queueState.pending.includes(data.prompt_id)) queueState.pending.push(data.prompt_id);
+  }
   renderQueueRow(data.prompt_id);
-  return true;
+  return data.prompt_id;
 }
 
 // ---- Queue panel (F8) ----
@@ -718,7 +722,14 @@ function renderAllQueueRows() {
   for (const promptId of queueState.rows.keys()) renderQueueRow(promptId);
 }
 
+// X/Y plot runs waiting for their prompts to finish: prompt id -> resolve(outputs | null).
+const xyWaiters = new Map();
+
 function updateQueueEntry(promptId, fields) {
+  if (xyWaiters.has(promptId) && ["completed", "error", "cancelled", "interrupted"].includes(fields.status)) {
+    xyWaiters.get(promptId)(fields.status === "completed" ? fields.outputs || {} : null);
+    xyWaiters.delete(promptId);
+  }
   const entry = { ...(queueState.entries.get(promptId) || {}), ...fields };
   queueState.entries.set(promptId, entry);
   if (entry.status !== "queued") queueState.pending = queueState.pending.filter((id) => id !== promptId);
@@ -1734,6 +1745,170 @@ async function saveMask() {
   showToast(`Mask saved as ${filename}`);
 }
 
+// ---- X/Y plot (F18): a grid over one or two widget values -> a contact sheet ----
+
+/** Resolves with a prompt's outputs once it finishes (null if it fails) -- also
+ * when it already finished before this was called: a fast run's WebSocket
+ * message can beat the queue request's own response. */
+function waitForPrompt(promptId) {
+  const entry = queueState.entries.get(promptId);
+  if (entry && entry.status === "completed") return Promise.resolve(entry.outputs || {});
+  if (entry && ["error", "cancelled", "interrupted"].includes(entry.status)) return Promise.resolve(null);
+  return new Promise((resolve) => xyWaiters.set(promptId, resolve));
+}
+
+function xyCandidateNodes() {
+  return graph._nodes.filter((n) => n.inputSpecs && n.mode === LiteGraph.ALWAYS && xyWidgets(n).length);
+}
+
+function xyWidgets(node) {
+  const converted = new Set(node.properties[CONVERTED_PROPERTY] || []);
+  return Object.entries(node.inputSpecs || {})
+    .filter(([name, spec]) => !converted.has(name) && (PRIMITIVE_WIDGET_TYPES.includes(spec[0]) || Array.isArray(spec[0])))
+    .map(([name]) => name);
+}
+
+function fillXyWidgetSelect(axis) {
+  const node = graph.getNodeById(Number(document.getElementById(`xy-${axis}-node`).value));
+  const select = document.getElementById(`xy-${axis}-widget`);
+  select.textContent = "";
+  for (const name of node ? xyWidgets(node) : []) select.add(new Option(name, name));
+  select.disabled = !node;
+  document.getElementById(`xy-${axis}-values`).disabled = !node;
+  if (node) {
+    const preferred = { x: ["cfg", "steps", "denoise"], y: ["steps", "seed", "sampler"] }[axis].find((n) => xyWidgets(node).includes(n));
+    if (preferred) select.value = preferred;
+  }
+}
+
+function openXyPlot() {
+  const nodes = xyCandidateNodes();
+  if (!nodes.length) {
+    showToast("Build a graph first: the X/Y plot varies widgets of its nodes.");
+    return;
+  }
+  for (const axis of ["x", "y"]) {
+    const select = document.getElementById(`xy-${axis}-node`);
+    select.textContent = "";
+    if (axis === "y") select.add(new Option("(none)", ""));
+    for (const node of nodes) select.add(new Option(`${node.title} #${node.id}`, String(node.id)));
+    const sampler = nodes.find((n) => /^KSampler/.test(n.comfyClass));
+    if (sampler) select.value = String(sampler.id);
+    if (axis === "y") select.value = "";
+    select.onchange = () => fillXyWidgetSelect(axis);
+    fillXyWidgetSelect(axis);
+  }
+  document.getElementById("xy-status").textContent = "";
+  openOverlay("xy-overlay");
+}
+
+function xyAxis(axis) {
+  const node = graph.getNodeById(Number(document.getElementById(`xy-${axis}-node`).value));
+  if (!node) return null;
+  const name = document.getElementById(`xy-${axis}-widget`).value;
+  const spec = node.inputSpecs[name];
+  let values;
+  try {
+    values = Logic.parseAxisValues(document.getElementById(`xy-${axis}-values`).value, Array.isArray(spec[0]) ? "COMBO" : spec[0]);
+  } catch (err) {
+    throw new Error(`${axis.toUpperCase()} values: ${err.message}`, { cause: err });
+  }
+  if (Array.isArray(spec[0])) {
+    const unknown = values.filter((v) => !spec[0].includes(v));
+    if (unknown.length) throw new Error(`${axis.toUpperCase()}: ${name} has no option ${unknown.join(", ")}`);
+  }
+  return { node, name, values };
+}
+
+async function runXyPlot() {
+  const status = document.getElementById("xy-status");
+  let x, y;
+  try {
+    x = xyAxis("x");
+    y = xyAxis("y");
+    if (!x) throw new Error("choose the X axis node");
+  } catch (err) {
+    status.textContent = err.message;
+    return;
+  }
+  const yValues = y ? y.values : [null];
+  const total = x.values.length * yValues.length;
+  if (total > Logic.XY_MAX_CELLS) {
+    status.textContent = `${total} cells is too many (at most ${Logic.XY_MAX_CELLS}).`;
+    return;
+  }
+  const button = document.getElementById("xy-run");
+  button.disabled = true;
+  // Every cell uses the same seeds, so only the X and Y values differ.
+  const saved = new Map();
+  const remember = (node, name) => {
+    const key = `${node.id}:${name}`;
+    if (!saved.has(key)) saved.set(key, [node, name, node.properties[name]]);
+  };
+  for (const node of seedNodes()) {
+    remember(node, node.seedInputName);
+    setNodeValue(node, node.seedInputName, Logic.seedForQueue(node.properties[node.seedInputName]));
+  }
+  remember(x.node, x.name);
+  if (y) remember(y.node, y.name);
+  const waits = [];
+  try {
+    for (const yValue of yValues) {
+      for (const xValue of x.values) {
+        setNodeValue(x.node, x.name, xValue);
+        if (y) setNodeValue(y.node, y.name, yValue);
+        status.textContent = `Queueing ${waits.length + 1} of ${total}…`;
+        const promptId = await submitPrompt(false);
+        if (!promptId) throw new Error("a prompt couldn't be queued (see the message)");
+        waits.push(waitForPrompt(promptId));
+      }
+    }
+  } catch (err) {
+    status.textContent = err.message;
+    button.disabled = false;
+    return;
+  } finally {
+    for (const [node, name, value] of saved.values()) setNodeValue(node, name, value);
+  }
+  let done = 0;
+  const outputs = await Promise.all(waits.map((wait) => wait.then((result) => {
+    done += 1;
+    status.textContent = `Running: ${done} of ${total} done…`;
+    return result;
+  })));
+  const cells = outputs.map((result) => Logic.firstImage(result));
+  if (!cells.some(Boolean)) {
+    status.textContent = "No run produced an image (add a Save Image or Preview Image).";
+    button.disabled = false;
+    return;
+  }
+  status.textContent = "Composing the contact sheet…";
+  try {
+    const res = await fetch("/api/contact_sheet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cells,
+        columns: x.values.length,
+        x_values: x.values.map(String),
+        y_values: yValues.map((v) => (v === null ? "" : String(v))),
+        x_label: `${x.node.title}: ${x.name}`,
+        y_label: y ? `${y.node.title}: ${y.name}` : "",
+      }),
+    });
+    if (!res.ok) throw new Error((await errorFromResponse(res)).message);
+    const sheet = await res.json();
+    addGalleryItems([{ filename: sheet.filename, type: sheet.type, promptId: null, meta: {} }]);
+    status.textContent = `Saved ${sheet.filename}`;
+    closeOverlay("xy-overlay");
+    openLightbox(galleryItems.findIndex((item) => item.filename === sheet.filename));
+  } catch (err) {
+    status.textContent = `Couldn't compose the sheet: ${err.message}`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 // ---- Templates (F18): read-only starter graphs under frontend/templates/ ----
 
 // A template is {nodes: [{id, type, pos, values}], links: [[from id, output slot,
@@ -1878,7 +2053,7 @@ async function openSystemPanel() {
 // ---- Wiring up UI ----
 
 function handleShortcut(e) {
-  for (const id of ["modal-overlay", "workflow-overlay", "template-overlay", "mask-overlay", "system-overlay", "help-overlay"]) {
+  for (const id of ["modal-overlay", "workflow-overlay", "template-overlay", "mask-overlay", "xy-overlay", "system-overlay", "help-overlay"]) {
     const overlay = document.getElementById(id);
     if (!overlay.classList.contains("hidden")) {
       if (id !== "modal-overlay") trapFocus(overlay, e);
@@ -2008,6 +2183,9 @@ function initPanels() {
 function initUI() {
   initPanels();
   initMaskEditor();
+  document.getElementById("btn-xy").onclick = openXyPlot;
+  document.getElementById("xy-run").onclick = runXyPlot;
+  document.getElementById("xy-close").onclick = () => closeOverlay("xy-overlay");
   document.getElementById("btn-queue").onclick = (e) => queuePrompt({ front: e.shiftKey, count: queueCount() });
   document.getElementById("btn-example").onclick = loadExampleGraph;
   document.getElementById("btn-templates").onclick = openTemplates;

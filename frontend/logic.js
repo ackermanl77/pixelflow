@@ -483,6 +483,45 @@
     return [left - padding, top - padding - titleHeight, right - left + 2 * padding, bottom - top + 2 * padding + titleHeight];
   }
 
+  // ---- X/Y plot (F18) ----
+
+  const XY_MAX_CELLS = 100;
+
+  /**
+   * An axis's values from the dialog's text, typed like the widget: a comma
+   * list ("4, 8, 20" / "euler, dpm++") or, for numbers, a range "start-end"
+   * or "start-end:step" ("1-9:2" -> 1, 3, 5, 7, 9). Throws on bad input.
+   */
+  function parseAxisValues(text, type) {
+    const raw = String(text || "").trim();
+    if (!raw) throw new Error("enter at least one value");
+    const numeric = type === "INT" || type === "FLOAT";
+    const range = numeric && raw.match(/^(-?[\d.]+)\s*-\s*(-?[\d.]+)(?:\s*:\s*([\d.]+))?$/);
+    let values;
+    if (range) {
+      const [start, end] = [Number(range[1]), Number(range[2])];
+      const step = range[3] ? Number(range[3]) : 1;
+      if (!(step > 0) || end < start) throw new Error(`"${raw}" isn't an increasing range`);
+      values = [];
+      for (let v = start; v <= end + 1e-9 && values.length <= XY_MAX_CELLS; v += step) values.push(Number(v.toFixed(6)));
+    } else {
+      values = raw.split(",").map((v) => v.trim()).filter((v) => v !== "");
+    }
+    if (type === "INT") values = values.map((v) => Math.trunc(Number(v)));
+    else if (type === "FLOAT") values = values.map(Number);
+    else if (type === "BOOLEAN") values = values.map((v) => v === true || String(v).toLowerCase() === "true");
+    if (numeric && values.some((v) => !Number.isFinite(v))) throw new Error(`"${raw}" has a value that isn't a number`);
+    if (!values.length) throw new Error("enter at least one value");
+    return values;
+  }
+
+  /** The first image a run produced (Save Image preferred over previews), or null. */
+  function firstImage(outputs) {
+    const all = Object.values(outputs || {}).filter((o) => o && Array.isArray(o.images) && o.images.length);
+    const pick = all.find((o) => o.type === "output") || all[0];
+    return pick ? { filename: pick.images[0], type: pick.type || "output" } : null;
+  }
+
   const PANEL_MIN_WIDTH = 160;
   const PANEL_MAX_WIDTH = 520;
 
@@ -541,5 +580,8 @@
     pushUndo,
     groupBounds,
     clampPanelWidth,
+    XY_MAX_CELLS,
+    parseAxisValues,
+    firstImage,
   };
 });

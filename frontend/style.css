@@ -473,3 +473,9 @@ kbd { background: #2a2b33; border: 1px solid var(--border); border-radius: 3px; 
 .mask-toolbar label { display: inline-flex; align-items: center; gap: 6px; }
 .mask-toolbar input[type="range"], .mask-toolbar input[type="radio"] { width: auto; display: inline-block; margin: 0; padding: 0; }
 .mask-mode { display: inline-flex; gap: 12px; }
+
+/* X/Y plot (F18) */
+.xy-grid { display: grid; grid-template-columns: auto 1fr 1fr 2fr; gap: 6px 8px; align-items: center; font-size: 12px; }
+.xy-grid > span { color: var(--text-dim); }
+.xy-grid select { background: #191a1f; color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; }
+.xy-status { min-height: 1.4em; }

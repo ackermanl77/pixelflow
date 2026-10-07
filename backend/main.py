@@ -18,7 +18,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import paths
+from . import contact_sheet, paths
 from .config import APP_ID, app_version, test_mode
 from .engine.graph import PromptValidationError, validate_prompt
 from .engine.queue import ConnectionManager, ExecutionQueue
@@ -388,6 +388,40 @@ async def output_to_upload(ref: OutputRef):
     with handle, open(source, "rb") as src:
         shutil.copyfileobj(src, handle)
     return {"filename": dest.name}
+
+
+class ContactSheetRequest(BaseModel):
+    """An X/Y plot's results (F18): one cell per grid point, row-major (null:
+    the run failed), plus the axis labels."""
+
+    cells: list[Optional[OutputRef]] = Field(..., min_length=1, max_length=contact_sheet.MAX_CELLS)
+    columns: int = Field(..., ge=1, le=contact_sheet.MAX_CELLS)
+    x_values: list[str] = Field(..., max_length=contact_sheet.MAX_CELLS)
+    y_values: list[str] = Field(..., max_length=contact_sheet.MAX_CELLS)
+    x_label: str = Field("", max_length=200)
+    y_label: str = Field("", max_length=200)
+
+
+@app.post("/api/contact_sheet")
+def make_contact_sheet(request: ContactSheetRequest):
+    """Lay an X/Y plot's images out in a labelled grid and save it to
+    outputs/xy_plot/ (the gallery picks it up like any output)."""
+    images = []
+    for ref in request.cells:
+        if ref is None:
+            images.append(None)
+            continue
+        with Image.open(_generated_file(ref.type, ref.filename)) as opened:
+            images.append(opened.convert("RGB"))
+    try:
+        sheet = contact_sheet.compose(
+            images, request.columns, [v[:60] for v in request.x_values], [v[:60] for v in request.y_values],
+            request.x_label, request.y_label,
+        )
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
+    filename = io_nodes.save_numbered(sheet, "xy_plot/xy_plot", io_nodes.OUTPUT_DIR)
+    return {"filename": filename, "type": "output"}
 
 
 # ---- models and system ----

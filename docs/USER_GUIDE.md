@@ -249,6 +249,18 @@ Stable Diffusion pipeline (via `diffusers`) end to end:
 - Large images (over about 1536×1536) are decoded in tiles to save GPU
   memory, and a run that runs out of GPU memory is retried once that way.
 
+## X/Y Plot
+
+**X/Y Plot…** (next to Queue Prompt) compares settings side by side. Pick a
+node and one of its widgets for X (for example the sampler's `cfg`) and
+optionally for Y (its `steps`), and type the values: a comma list
+(`3, 5, 7` or `euler, dpm++ 2m`) or, for numbers, a range like `4-20:4`.
+**Queue grid** queues the graph once per combination -- every cell with the
+same seeds, so only the two values differ -- then lays the results out in a
+labelled contact sheet saved to `outputs/xy_plot/` and opened in the viewer.
+A cell whose run failed is dark red. Up to 100 cells; your graph's own
+values are left as they were.
+
 ## Saving and loading your work
 
 - **Save** (<kbd>Ctrl+S</kbd>) — asks for a name the first time, then saves

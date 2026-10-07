@@ -212,3 +212,28 @@ test("mask editor: paint, save, and the mask lands in a Load Mask wired to the i
   }, result.file);
   expect(pixels).toEqual({ size: [300, 200], center: 255, corner: 0, belowStroke: 0 });
 });
+
+test("X/Y plot: a 2x2 grid runs for real and its contact sheet opens", async ({ page }) => {
+  await page.evaluate(() => {
+    const empty = addNodeToGraph("EmptyImage", [60, 100]);
+    const save = addNodeToGraph("SaveImage", [420, 100]);
+    empty.connect(0, save, findInputSlot(save, "image"));
+  });
+  await page.click("#btn-xy");
+  await expect(page.locator("#xy-overlay")).toBeVisible();
+  const emptyId = await page.evaluate(() => String(graph._nodes.find((n) => n.comfyClass === "EmptyImage").id));
+  await page.selectOption("#xy-x-node", emptyId);
+  await page.selectOption("#xy-x-widget", "width");
+  await page.fill("#xy-x-values", "64, 96");
+  await page.selectOption("#xy-y-node", emptyId);
+  await page.selectOption("#xy-y-widget", "color");
+  await page.fill("#xy-y-values", "#ff0000, #0000ff");
+  await page.click("#xy-run");
+  await expect(page.locator("#lightbox-overlay")).toBeVisible({ timeout: 30_000 });
+  const sheet = page.locator("#lightbox-overlay img").first();
+  await expect.poll(() => sheet.evaluate((el) => el.naturalWidth)).toBeGreaterThan(2 * 96);
+  expect(await sheet.getAttribute("src")).toContain("xy_plot");
+  // The graph's own values are back after the grid was queued.
+  const width = await page.evaluate(() => graph._nodes.find((n) => n.comfyClass === "EmptyImage").properties.width);
+  expect(width).toBe(512);
+});

@@ -131,3 +131,21 @@ test("coercePrimitive turns a Primitive's text into the driven widget's type", (
   assert.equal(L.coercePrimitive(false, "BOOLEAN"), false);
   assert.equal(L.coercePrimitive(12, "STRING"), "12");
 });
+
+test("X/Y plot axis values: lists, numeric ranges and typing (F18)", () => {
+  assert.deepEqual(L.parseAxisValues("4, 8 ,20", "INT"), [4, 8, 20]);
+  assert.deepEqual(L.parseAxisValues("1-9:2", "INT"), [1, 3, 5, 7, 9]);
+  assert.deepEqual(L.parseAxisValues("0.2-0.6:0.2", "FLOAT"), [0.2, 0.4, 0.6]);
+  assert.deepEqual(L.parseAxisValues("euler, dpm++", "COMBO"), ["euler", "dpm++"]);
+  assert.deepEqual(L.parseAxisValues("true,false", "BOOLEAN"), [true, false]);
+  assert.deepEqual(L.parseAxisValues("-2-2", "INT"), [-2, -1, 0, 1, 2]);
+  assert.throws(() => L.parseAxisValues("", "INT"));
+  assert.throws(() => L.parseAxisValues("4, x", "INT"));
+  assert.throws(() => L.parseAxisValues("9-1", "INT"));
+});
+
+test("firstImage prefers saved outputs over previews", () => {
+  assert.equal(L.firstImage({}), null);
+  assert.deepEqual(L.firstImage({ 3: { images: ["p.png"], type: "temp" }, 5: { images: ["s.png", "t.png"], type: "output" } }), { filename: "s.png", type: "output" });
+  assert.deepEqual(L.firstImage({ 3: { images: ["p.png"], type: "temp" } }), { filename: "p.png", type: "temp" });
+});
