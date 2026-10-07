@@ -80,6 +80,16 @@ whole width, and brings it back. The layout is remembered in this browser.
    them together. Right-click the group's title for **Mute group**, **Bypass
    group**, **Select nodes**, and **Edit Group** (title, colour, remove).
    Groups are saved with the workflow.
+8. **Reroute** (utils) — a small pass-through node: wire an output into it
+   and its output on to one or more inputs, to tidy long wires.
+9. **Share one value** — right-click a node and pick **Convert <widget> to
+   input** (e.g. a sampler's `seed`, or a prompt's `text`), then wire a
+   **Primitive** (utils) into that new input: its value is used for every
+   input it's wired to, so one seed or one size drives several nodes. The
+   first wire copies the widget's current value into the Primitive. Convert
+   the input back to a widget (once it's unwired) from the same menu.
+   Reroute and Primitive only exist in the editor -- they are resolved when
+   the prompt is queued, so the server never runs them.
 
 ## Running a graph
 

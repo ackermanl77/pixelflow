@@ -167,6 +167,28 @@
     return typeof name === "string" && name.startsWith("_");
   }
 
+  // Frontend-only nodes (F18): never sent to the backend. A Reroute passes its
+  // one input through; a Primitive's value is written into every widget input
+  // it drives (a widget converted to an input), so one seed or prompt can
+  // drive several nodes.
+  const REROUTE = "Reroute";
+  const PRIMITIVE = "Primitive";
+  const FRONTEND_NODES = new Set([REROUTE, PRIMITIVE]);
+
+  /** A Primitive's value as the widget type it drives. */
+  function coercePrimitive(value, type) {
+    if (type === "INT") {
+      const number = Math.trunc(Number(value));
+      return Number.isFinite(number) ? number : 0;
+    }
+    if (type === "FLOAT") {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : 0;
+    }
+    if (type === "BOOLEAN") return value === true || String(value).toLowerCase() === "true";
+    return value == null ? "" : String(value);
+  }
+
   /**
    * Build the ComfyUI-style execution prompt from a plain description of
    * the graph: nodes = [{id, mode, comfyClass, properties, inputs:
@@ -174,7 +196,8 @@
    * origin_slot}}. Muted nodes (mode 2) are left out, so anything that
    * needs them drops out too; a bypassed node (mode 4) is left out and each
    * consumer is wired to the bypassed node's first input of the same type
-   * instead (through chains of bypassed nodes).
+   * instead (through chains of bypassed nodes). Reroutes are followed to
+   * their source; a Primitive's value is inlined into the inputs it drives.
    */
   function buildPrompt(nodes, links) {
     const byId = new Map(nodes.map((n) => [String(n.id), n]));
@@ -183,6 +206,14 @@
     function resolveSource(originId, originSlot, seen) {
       const node = byId.get(String(originId));
       if (!node || node.mode === MODE_MUTE) return null;
+      if (node.comfyClass === PRIMITIVE) return { value: (node.properties || {}).value };
+      if (node.comfyClass === REROUTE) {
+        if (seen.has(node.id)) return null;
+        seen.add(node.id);
+        const input = (node.inputs || [])[0];
+        const link = input && input.link != null ? linkOf(input.link) : null;
+        return link ? resolveSource(link.origin_id, link.origin_slot, seen) : null;
+      }
       if (node.mode !== MODE_BYPASS) return [String(originId), originSlot];
       if (seen.has(node.id)) return null;
       seen.add(node.id);
@@ -195,7 +226,7 @@
 
     const prompt = {};
     for (const node of nodes) {
-      if (node.mode === MODE_MUTE || node.mode === MODE_BYPASS) continue;
+      if (node.mode === MODE_MUTE || node.mode === MODE_BYPASS || FRONTEND_NODES.has(node.comfyClass)) continue;
       const inputs = {};
       for (const [name, value] of Object.entries(node.properties || {})) {
         if (!isFrontendOnlyProperty(name)) inputs[name] = value;
@@ -204,7 +235,9 @@
         if (inp.link == null) continue;
         const link = linkOf(inp.link);
         const source = link && resolveSource(link.origin_id, link.origin_slot, new Set());
-        if (source) inputs[inp.name] = source;
+        if (source && !Array.isArray(source)) inputs[inp.name] = coercePrimitive(source.value, inp.type);
+        else if (source) inputs[inp.name] = source;
+        else if (PRIMITIVE_TYPES.has(inp.type)) continue; // a converted widget: its own value stays
         else delete inputs[inp.name];
       }
       prompt[String(node.id)] = { class_type: node.comfyClass, inputs };
@@ -483,6 +516,10 @@
     MODE_BYPASS,
     isFrontendOnlyProperty,
     buildPrompt,
+    REROUTE,
+    PRIMITIVE,
+    FRONTEND_NODES,
+    coercePrimitive,
     MAX_SEED,
     SEED_CONTROLS,
     seedForQueue,

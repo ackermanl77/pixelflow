@@ -100,3 +100,51 @@ test("side panels resize and collapse, and the canvas follows; the layout is rem
   await expect(page.locator("#sidebar")).toBeVisible();
   expect(await width("#sidebar")).toBe(before + 40);
 });
+
+test("reroute and primitive nodes: a primitive drives a converted widget through the real run", async ({ page }) => {
+  // The palette lists the two frontend-only nodes under "utils".
+  await expect(page.locator("#node-list .node-item", { hasText: /^Reroute$/ })).toBeVisible();
+  await expect(page.locator("#node-list .node-item", { hasText: /^Primitive$/ })).toBeVisible();
+
+  const prompt = await page.evaluate(() => {
+    const empty = addNodeToGraph("EmptyImage", [60, 100]);
+    const reroute = addNodeToGraph("Reroute", [380, 140]);
+    const save = addNodeToGraph("SaveImage", [560, 100]);
+    const primitive = addNodeToGraph("Primitive", [60, 380]);
+    // Right-click menu: "Convert width to input".
+    const option = empty.getExtraMenuOptions().find((o) => o && o.content === "Convert width to input");
+    option.callback();
+    empty.connect(0, reroute, 0);
+    reroute.connect(0, save, findInputSlot(save, "image"));
+    primitive.connect(0, empty, findInputSlot(empty, "width"));
+    setNodeValue(primitive, "value", "200");
+    return buildPrompt();
+  });
+  const classes = Object.values(prompt).map((n) => n.class_type).sort();
+  expect(classes).toEqual(["EmptyImage", "SaveImage"]);
+  const empty = Object.values(prompt).find((n) => n.class_type === "EmptyImage");
+  expect(empty.inputs.width).toBe(200);
+  const save = Object.values(prompt).find((n) => n.class_type === "SaveImage");
+  expect(save.inputs.image[0]).toBe(Object.keys(prompt).find((id) => prompt[id] === empty));
+
+  // It runs for real (Empty Image -> Save Image needs no model): the output is 200 px wide.
+  await page.click("#btn-queue");
+  const img = page.locator("#gallery .gallery-item img").first();
+  await expect(img).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => img.evaluate((el) => el.naturalWidth)).toBe(200);
+
+  // A converted widget survives a reload of the graph: still an input, still linked, no widget.
+  const restored = await page.evaluate(() => {
+    const data = graph.serialize();
+    graph.clear();
+    graph.configure(data);
+    syncWidgetsFromProperties();
+    const node = graph._nodes.find((n) => n.comfyClass === "EmptyImage");
+    return {
+      input: node.inputs[findInputSlot(node, "width")].link !== null,
+      widget: node.widgets.some((w) => w.name === "width"),
+      width: buildPrompt()[String(node.id)].inputs.width,
+    };
+  });
+  expect(restored).toEqual({ input: true, widget: false, width: 200 });
+});

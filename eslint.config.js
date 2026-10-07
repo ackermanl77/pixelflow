@@ -57,7 +57,12 @@ module.exports = [
     // Playwright specs: callbacks passed to page.evaluate() run in the page,
     // where app.js's top-level `graph` / `canvas` are globals.
     files: ["tests/e2e/**/*.js"],
-    languageOptions: { globals: { ...globals.browser, graph: "readonly", canvas: "readonly", buildPrompt: "readonly" } },
+    languageOptions: {
+      globals: {
+        ...globals.browser, graph: "readonly", canvas: "readonly", buildPrompt: "readonly",
+        addNodeToGraph: "readonly", findInputSlot: "readonly", setNodeValue: "readonly", syncWidgetsFromProperties: "readonly",
+      },
+    },
   },
   {
     rules: {

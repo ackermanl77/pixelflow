@@ -288,6 +288,7 @@ function makeNodeClass(nodeName, def) {
     const required = def.input_types.required || {};
     const optional = def.input_types.optional || {};
     const all = Object.assign({}, required, optional);
+    this.inputSpecs = all;
     for (const [pname, pspec] of Object.entries(all)) {
       addPropertyWidget(this, pname, pspec);
     }
@@ -312,10 +313,116 @@ function makeNodeClass(nodeName, def) {
       null,
       { content: this.mode === Logic.MODE_BYPASS ? "Un-bypass (Ctrl+B)" : "Bypass (Ctrl+B)", callback: () => toggleMode([this], Logic.MODE_BYPASS) },
       { content: this.mode === Logic.MODE_MUTE ? "Unmute (Ctrl+M)" : "Mute (Ctrl+M)", callback: () => toggleMode([this], Logic.MODE_MUTE) },
+      ...widgetConversionOptions(this),
     ];
+  };
+  NodeCtor.prototype.onConfigure = function () {
+    // A loaded/restored graph: its converted widgets are inputs again (their
+    // sockets came back with the saved inputs; the widgets came from the constructor).
+    for (const name of this.properties[CONVERTED_PROPERTY] || []) hideWidget(this, name);
   };
   return NodeCtor;
 }
+
+// ---- Widget <-> input conversion, Reroute and Primitive nodes (F18) ----
+
+const CONVERTED_PROPERTY = "_converted"; // frontend-only: widget names shown as inputs
+const PRIMITIVE_WIDGET_TYPES = ["INT", "FLOAT", "STRING", "BOOLEAN"];
+
+function hideWidget(node, name) {
+  const index = (node.widgets || []).findIndex((w) => w.name === name);
+  if (index >= 0) node.widgets.splice(index, 1);
+  if (name === node.seedInputName) {
+    const control = node.widgets.findIndex((w) => w.name === "control after generate");
+    if (control >= 0) node.widgets.splice(control, 1);
+  }
+  node.setSize(node.computeSize());
+}
+
+function convertWidgetToInput(node, name) {
+  const type = node.inputSpecs[name][0];
+  hideWidget(node, name);
+  node.addInput(name, type);
+  node.properties[CONVERTED_PROPERTY] = [...(node.properties[CONVERTED_PROPERTY] || []), name];
+  node.setSize(node.computeSize());
+  canvas.setDirty(true, true);
+  scheduleHistoryPush();
+}
+
+function convertInputToWidget(node, name) {
+  const slot = findInputSlot(node, name);
+  if (slot < 0 || node.inputs[slot].link != null) return;
+  node.removeInput(slot);
+  const value = node.properties[name];
+  addPropertyWidget(node, name, node.inputSpecs[name]);
+  setNodeValue(node, name, value); // addPropertyWidget resets the property to the default
+  node.properties[CONVERTED_PROPERTY] = (node.properties[CONVERTED_PROPERTY] || []).filter((n) => n !== name);
+  node.setSize(node.computeSize());
+  canvas.setDirty(true, true);
+  scheduleHistoryPush();
+}
+
+function widgetConversionOptions(node) {
+  const converted = new Set(node.properties[CONVERTED_PROPERTY] || []);
+  const options = [];
+  for (const [name, spec] of Object.entries(node.inputSpecs || {})) {
+    if (!PRIMITIVE_WIDGET_TYPES.includes(spec[0])) continue;
+    if (converted.has(name)) {
+      const linked = node.inputs[findInputSlot(node, name)]?.link != null;
+      options.push({ content: `Convert ${name} to widget`, disabled: linked, callback: () => convertInputToWidget(node, name) });
+    } else {
+      options.push({ content: `Convert ${name} to input`, callback: () => convertWidgetToInput(node, name) });
+    }
+  }
+  return options.length ? [null, ...options] : [];
+}
+
+function RerouteNode() {
+  this.comfyClass = Logic.REROUTE;
+  this.properties = {};
+  this.addInput("", "*");
+  this.addOutput("", "*");
+  this.size = [90, 26];
+}
+RerouteNode.title = "Reroute";
+RerouteNode.desc = "Passes one connection through: tidy long wires, or split one output to many inputs.";
+RerouteNode.prototype.onConnectionsChange = function () {
+  // Show the type it carries once wired (any type goes through).
+  const link = this.inputs[0].link != null ? graph.links[this.inputs[0].link] : null;
+  this.outputs[0].label = link ? link.type : "";
+};
+
+function PrimitiveNode() {
+  this.comfyClass = Logic.PRIMITIVE;
+  this.properties = { value: "" };
+  this.addOutput("value", "INT,FLOAT,STRING,BOOLEAN");
+  this.addWidget("text", "value", "", (v) => {
+    this.properties.value = v;
+    scheduleHistoryPush();
+  });
+  this.size = this.computeSize();
+}
+PrimitiveNode.title = "Primitive";
+PrimitiveNode.desc = "One value (a seed, a prompt, a size) for several nodes: right-click a node -> Convert <widget> to input, then wire this into it.";
+PrimitiveNode.prototype.onConnectOutput = function (_slot, type) {
+  return PRIMITIVE_WIDGET_TYPES.includes(type);
+};
+PrimitiveNode.prototype.onConnectionsChange = function (kind, _slot, connected, linkInfo) {
+  // First wire: start from the driven widget's current value and say which kind it is.
+  if (kind !== LiteGraph.OUTPUT || !connected || !linkInfo) return;
+  const target = graph.getNodeById(linkInfo.target_id);
+  const input = target && target.inputs[linkInfo.target_slot];
+  if (!input) return;
+  this.title = `Primitive (${input.type})`;
+  if (this.properties.value === "" && input.name in target.properties) {
+    setNodeValue(this, "value", String(target.properties[input.name]));
+  }
+};
+
+const FRONTEND_NODE_DEFS = {
+  [Logic.REROUTE]: { display_name: "Reroute", category: "utils", description: RerouteNode.desc, ctor: RerouteNode },
+  [Logic.PRIMITIVE]: { display_name: "Primitive", category: "utils", description: PrimitiveNode.desc, ctor: PrimitiveNode },
+};
 
 function toggleMode(nodes, mode) {
   if (!nodes.length) return;
@@ -387,6 +494,11 @@ async function loadNodeDefs() {
   for (const [oldName, newName] of Object.entries(nodeAliases)) {
     if (registeredType[newName]) registeredType[oldName] = registeredType[newName];
   }
+  for (const [name, def] of Object.entries(FRONTEND_NODE_DEFS)) {
+    const fullType = `PixelFlow/${def.category}/${def.display_name}`;
+    registeredType[name] = fullType;
+    LiteGraph.registerNodeType(fullType, def.ctor);
+  }
   buildSidebar();
 }
 
@@ -396,7 +508,8 @@ function buildSidebar() {
   const container = document.getElementById("node-list");
   container.innerHTML = "";
   const byCategory = {};
-  for (const [name, def] of Object.entries(nodeDefs)) {
+  const allDefs = { ...nodeDefs, ...FRONTEND_NODE_DEFS };
+  for (const [name, def] of Object.entries(allDefs)) {
     (byCategory[def.category] = byCategory[def.category] || []).push(name);
   }
   for (const category of Object.keys(byCategory).sort()) {
@@ -411,9 +524,9 @@ function buildSidebar() {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "node-item";
-      item.textContent = nodeDefs[name].display_name;
-      item.title = nodeDefs[name].description || `Add ${nodeDefs[name].display_name}`;
-      item.dataset.name = nodeDefs[name].display_name.toLowerCase();
+      item.textContent = allDefs[name].display_name;
+      item.title = allDefs[name].description || `Add ${allDefs[name].display_name}`;
+      item.dataset.name = allDefs[name].display_name.toLowerCase();
       item.draggable = true;
       item.onclick = () => addNodeToGraph(name);
       item.addEventListener("dragstart", (e) => {

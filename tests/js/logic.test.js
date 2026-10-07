@@ -95,3 +95,39 @@ test("side panel widths stay within 160-520 px and a third of the window (F17)",
   assert.equal(L.clampPanelWidth(500, 1200), 400);
   assert.equal(L.clampPanelWidth("junk"), 160);
 });
+
+test("Reroutes are followed and Primitives inlined into the inputs they drive (F18)", () => {
+  const nodes = [
+    { id: 1, mode: 0, comfyClass: "EmptyImage", properties: { width: 512 }, inputs: [], outputs: [{ type: "IMAGE" }] },
+    { id: 2, mode: 0, comfyClass: "Reroute", properties: {}, inputs: [{ name: "", type: "*", link: 10 }], outputs: [{ type: "*" }] },
+    { id: 3, mode: 0, comfyClass: "Reroute", properties: {}, inputs: [{ name: "", type: "*", link: 11 }], outputs: [{ type: "*" }] },
+    { id: 4, mode: 0, comfyClass: "Primitive", properties: { value: "1234" }, inputs: [], outputs: [{ type: "*" }] },
+    {
+      id: 5, mode: 0, comfyClass: "KSamplerImage",
+      properties: { seed: 7, steps: 20 },
+      inputs: [{ name: "image", type: "IMAGE", link: 12 }, { name: "seed", type: "INT", link: 13 }, { name: "steps", type: "INT", link: null }],
+      outputs: [{ type: "IMAGE" }],
+    },
+  ];
+  const links = {
+    10: { origin_id: 1, origin_slot: 0 },
+    11: { origin_id: 2, origin_slot: 0 },
+    12: { origin_id: 3, origin_slot: 0 },
+    13: { origin_id: 4, origin_slot: 0 },
+  };
+  const prompt = L.buildPrompt(nodes, links);
+  assert.deepEqual(Object.keys(prompt).sort(), ["1", "5"]); // frontend-only nodes never reach the backend
+  assert.deepEqual(prompt["5"].inputs, { seed: 1234, steps: 20, image: ["1", 0] });
+  // A reroute with nothing upstream drops the input like a missing link.
+  nodes[1].inputs[0].link = null;
+  assert.equal("image" in L.buildPrompt(nodes, links)["5"].inputs, false);
+});
+
+test("coercePrimitive turns a Primitive's text into the driven widget's type", () => {
+  assert.equal(L.coercePrimitive("42.9", "INT"), 42);
+  assert.equal(L.coercePrimitive("x", "INT"), 0);
+  assert.equal(L.coercePrimitive("0.35", "FLOAT"), 0.35);
+  assert.equal(L.coercePrimitive("True", "BOOLEAN"), true);
+  assert.equal(L.coercePrimitive(false, "BOOLEAN"), false);
+  assert.equal(L.coercePrimitive(12, "STRING"), "12");
+});

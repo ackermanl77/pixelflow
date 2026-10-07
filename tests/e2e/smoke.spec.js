@@ -25,10 +25,10 @@ test("load, palette, add + connect nodes, run, save and load a workflow", async 
   await expect(page).toHaveTitle("PixelFlow");
   await expect(page.locator("#conn-status")).toHaveAttribute("data-state", "connected");
 
-  // The palette lists every node the backend reports.
+  // The palette lists every node the backend reports (plus the frontend-only ones).
   const nodes = await (await request.get("/api/nodes")).json();
   const items = page.locator("#node-list .node-item");
-  await expect(items).toHaveCount(Object.keys(nodes).length);
+  await expect(items).toHaveCount(Object.keys(nodes).length + 2); // + the frontend-only Reroute and Primitive
   await expect(items.filter({ hasText: /^KSampler$/ })).toBeVisible();
   await page.fill("#node-search", "blur");
   await expect(page.locator("#node-list .node-item:not(.hidden)")).toHaveText(["Blur"]);
