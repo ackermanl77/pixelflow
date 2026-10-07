@@ -461,3 +461,15 @@ kbd { background: #2a2b33; border: 1px solid var(--border); border-radius: 3px; 
 .template-list { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow-y: auto; }
 .template-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 8px 10px; }
 .template-item span { color: var(--text-dim); font-size: 12px; }
+
+/* Mask editor (F18) */
+.mask-box { width: min(92vw, 1100px); max-width: none; }
+.mask-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 8px; font-size: 13px; }
+.mask-hint { color: var(--text-dim); font-size: 12px; }
+.mask-stage { position: relative; display: flex; justify-content: center; background: #111; max-height: 70vh; }
+.mask-stage img { display: block; max-width: 100%; max-height: 70vh; user-select: none; }
+#mask-canvas { position: absolute; opacity: 0.55; cursor: crosshair; touch-action: none; }
+/* The modal's text-input style (full width, block) doesn't suit the mask toolbar's controls. */
+.mask-toolbar label { display: inline-flex; align-items: center; gap: 6px; }
+.mask-toolbar input[type="range"], .mask-toolbar input[type="radio"] { width: auto; display: inline-block; margin: 0; padding: 0; }
+.mask-mode { display: inline-flex; gap: 12px; }

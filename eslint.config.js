@@ -61,6 +61,7 @@ module.exports = [
       globals: {
         ...globals.browser, graph: "readonly", canvas: "readonly", buildPrompt: "readonly",
         addNodeToGraph: "readonly", findInputSlot: "readonly", setNodeValue: "readonly", syncWidgetsFromProperties: "readonly",
+        refreshUploadChoices: "readonly",
       },
     },
   },

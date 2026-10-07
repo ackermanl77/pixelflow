@@ -148,3 +148,67 @@ test("reroute and primitive nodes: a primitive drives a converted widget through
   });
   expect(restored).toEqual({ input: true, widget: false, width: 200 });
 });
+
+test("mask editor: paint, save, and the mask lands in a Load Mask wired to the inpaint sampler", async ({ page, request }) => {
+  // A 300x200 grey PNG to mask, uploaded the way the Upload button does.
+  const png = await page.evaluate(async () => {
+    const c = document.createElement("canvas");
+    c.width = 300;
+    c.height = 200;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#777";
+    ctx.fillRect(0, 0, 300, 200);
+    const blob = await new Promise((r) => c.toBlob(r, "image/png"));
+    return Array.from(new Uint8Array(await blob.arrayBuffer()));
+  });
+  const upload = await request.post("/api/upload", {
+    multipart: { file: { name: "maskme.png", mimeType: "image/png", buffer: Buffer.from(png) } },
+  });
+  const { filename } = await upload.json();
+
+  const ids = await page.evaluate(async (file) => {
+    await refreshUploadChoices();
+    const image = addNodeToGraph("LoadImage", [60, 80]);
+    const sampler = addNodeToGraph("KSamplerInpaint", [480, 80]);
+    setNodeValue(image, "filename", file);
+    image.connect(0, sampler, findInputSlot(sampler, "image"));
+    image.getExtraMenuOptions().find((o) => o && o.content === "Open in mask editor").callback();
+    return { image: image.id, sampler: sampler.id };
+  }, filename);
+  await expect(page.locator("#mask-overlay")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.getElementById("mask-canvas").width)).toBe(300);
+
+  // Paint a horizontal stroke across the middle with the real mouse.
+  const box = await page.locator("#mask-canvas").boundingBox();
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.8, box.y + box.height * 0.5, { steps: 10 });
+  await page.mouse.up();
+  await page.click("#mask-save");
+  await expect(page.locator("#mask-overlay")).toBeHidden();
+
+  const result = await page.evaluate((idsArg) => {
+    const image = graph.getNodeById(idsArg.image);
+    const mask = graph._nodes.find((n) => n.comfyClass === "LoadMask");
+    const sampler = graph.getNodeById(idsArg.sampler);
+    const link = graph.links[sampler.inputs[findInputSlot(sampler, "mask")].link];
+    return { file: mask.properties.filename, linked: link && link.origin_id === mask.id, remembered: image.properties._mask_node === mask.id };
+  }, ids);
+  expect(result.linked && result.remembered).toBe(true);
+  expect(result.file).toMatch(/mask/);
+
+  // The saved PNG is the image's size: white under the stroke, black elsewhere.
+  const pixels = await page.evaluate(async (file) => {
+    const img = new Image();
+    img.src = `/uploads/${encodeURIComponent(file)}`;
+    await img.decode();
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    const ctx = c.getContext("2d");
+    ctx.drawImage(img, 0, 0);
+    const at = (x, y) => ctx.getImageData(x, y, 1, 1).data[0];
+    return { size: [c.width, c.height], center: at(150, 100), corner: at(5, 5), belowStroke: at(150, 190) };
+  }, result.file);
+  expect(pixels).toEqual({ size: [300, 200], center: 255, corner: 0, belowStroke: 0 });
+});

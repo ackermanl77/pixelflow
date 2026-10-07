@@ -108,6 +108,30 @@
     </div>
   </div>
 
+  <!-- Mask editor (F18): paint the area to repaint over a Load Image's picture. -->
+  <div id="mask-overlay" class="modal-overlay hidden">
+    <div class="modal-box mask-box" role="dialog" aria-modal="true" aria-labelledby="mask-title">
+      <h3 id="mask-title">Mask editor</h3>
+      <div class="mask-toolbar">
+        <label>Brush <input id="mask-brush" type="range" min="4" max="200" value="40" aria-label="Brush size" /></label>
+        <span class="mask-mode" role="radiogroup" aria-label="Brush mode">
+          <label><input type="radio" name="mask-mode" value="paint" checked /> Paint</label>
+          <label><input type="radio" name="mask-mode" value="erase" /> Erase</label>
+        </span>
+        <button id="mask-clear" class="small">Clear</button>
+        <span class="mask-hint">Painted = repainted by the inpaint sampler. [ / ] brush size.</span>
+      </div>
+      <div id="mask-stage" class="mask-stage">
+        <img id="mask-image" alt="The image being masked" />
+        <canvas id="mask-canvas" aria-label="Mask: paint over the area to repaint"></canvas>
+      </div>
+      <div class="modal-actions">
+        <button id="mask-cancel">Cancel</button>
+        <button id="mask-save" class="primary">Save mask</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Templates (F18). -->
   <div id="template-overlay" class="modal-overlay hidden">
     <div class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="template-title">

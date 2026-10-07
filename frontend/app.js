@@ -313,6 +313,7 @@ function makeNodeClass(nodeName, def) {
       null,
       { content: this.mode === Logic.MODE_BYPASS ? "Un-bypass (Ctrl+B)" : "Bypass (Ctrl+B)", callback: () => toggleMode([this], Logic.MODE_BYPASS) },
       { content: this.mode === Logic.MODE_MUTE ? "Unmute (Ctrl+M)" : "Mute (Ctrl+M)", callback: () => toggleMode([this], Logic.MODE_MUTE) },
+      ...(this.comfyClass === "LoadImage" ? [null, { content: "Open in mask editor", callback: () => openMaskEditor(this) }] : []),
       ...widgetConversionOptions(this),
     ];
   };
@@ -1561,6 +1562,178 @@ function setNodeValue(node, name, value) {
   if (widget) widget.value = value;
 }
 
+// ---- Mask editor (F18): paint a mask over a Load Image's picture ----
+
+const MASK_PAINT = "rgba(255, 48, 48, 1)"; // shown at the canvas's CSS opacity
+const MASK_NODE_PROPERTY = "_mask_node"; // Load Image -> the Load Mask node it feeds
+let maskTarget = null; // the Load Image node being edited
+
+function maskCanvasPoint(e) {
+  const el = document.getElementById("mask-canvas");
+  const rect = el.getBoundingClientRect();
+  return [(e.clientX - rect.left) * (el.width / rect.width), (e.clientY - rect.top) * (el.height / rect.height)];
+}
+
+function linkedMaskNode(imageNode) {
+  const node = graph.getNodeById(imageNode.properties[MASK_NODE_PROPERTY]);
+  return node && node.comfyClass === "LoadMask" ? node : null;
+}
+
+async function openMaskEditor(imageNode) {
+  const filename = imageNode.properties[imageNode.uploadComboName];
+  if (!filename) {
+    showToast("Upload or choose an image in Load Image first.");
+    return;
+  }
+  maskTarget = imageNode;
+  const img = document.getElementById("mask-image");
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = () => reject(new Error("the image couldn't be loaded"));
+    img.src = `/uploads/${encodeURIComponent(filename)}`;
+  }).catch((err) => showToast(`Mask editor: ${err.message}`, "error"));
+  if (!img.naturalWidth) return;
+  openOverlay("mask-overlay");
+  const el = document.getElementById("mask-canvas");
+  el.width = img.naturalWidth;
+  el.height = img.naturalHeight;
+  layoutMaskCanvas();
+  const ctx = el.getContext("2d");
+  ctx.clearRect(0, 0, el.width, el.height);
+  // Re-opening shows the mask saved last time (white = painted).
+  const maskNode = linkedMaskNode(imageNode);
+  const maskFile = maskNode && maskNode.properties.filename;
+  if (maskFile) {
+    const previous = new Image();
+    await new Promise((resolve) => {
+      previous.onload = resolve;
+      previous.onerror = resolve;
+      previous.src = `/uploads/${encodeURIComponent(maskFile)}`;
+    });
+    if (previous.naturalWidth) {
+      ctx.drawImage(previous, 0, 0, el.width, el.height);
+      const data = ctx.getImageData(0, 0, el.width, el.height);
+      for (let i = 0; i < data.data.length; i += 4) {
+        const luminance = data.data[i];
+        data.data[i] = 255;
+        data.data[i + 1] = 48;
+        data.data[i + 2] = 48;
+        data.data[i + 3] = luminance;
+      }
+      ctx.putImageData(data, 0, 0);
+    }
+  }
+}
+
+function layoutMaskCanvas() {
+  const img = document.getElementById("mask-image");
+  const el = document.getElementById("mask-canvas");
+  el.style.left = `${img.offsetLeft}px`;
+  el.style.top = `${img.offsetTop}px`;
+  el.style.width = `${img.clientWidth}px`;
+  el.style.height = `${img.clientHeight}px`;
+}
+
+function initMaskEditor() {
+  const el = document.getElementById("mask-canvas");
+  const brush = document.getElementById("mask-brush");
+  let last = null;
+  const stroke = (from, to) => {
+    const ctx = el.getContext("2d");
+    const scale = el.width / el.getBoundingClientRect().width;
+    const erase = document.querySelector('input[name="mask-mode"]:checked').value === "erase";
+    ctx.globalCompositeOperation = erase ? "destination-out" : "source-over";
+    ctx.strokeStyle = MASK_PAINT;
+    ctx.lineWidth = Number(brush.value) * scale;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(from[0], from[1]);
+    ctx.lineTo(to[0], to[1]);
+    ctx.stroke();
+  };
+  el.addEventListener("pointerdown", (e) => {
+    el.setPointerCapture(e.pointerId);
+    last = maskCanvasPoint(e);
+    stroke(last, last);
+  });
+  el.addEventListener("pointermove", (e) => {
+    if (!last) return;
+    const point = maskCanvasPoint(e);
+    stroke(last, point);
+    last = point;
+  });
+  const end = () => {
+    last = null;
+  };
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", end);
+  document.getElementById("mask-overlay").addEventListener("keydown", (e) => {
+    if (e.key === "[" || e.key === "]") {
+      brush.value = String(Number(brush.value) + (e.key === "]" ? 1 : -1) * (e.shiftKey ? 20 : 5));
+      e.preventDefault();
+    }
+  });
+  window.addEventListener("resize", () => {
+    if (!document.getElementById("mask-overlay").classList.contains("hidden")) layoutMaskCanvas();
+  });
+  document.getElementById("mask-clear").onclick = () => el.getContext("2d").clearRect(0, 0, el.width, el.height);
+  document.getElementById("mask-cancel").onclick = () => closeOverlay("mask-overlay");
+  document.getElementById("mask-save").onclick = saveMask;
+}
+
+/** The painted strokes as a white-on-black PNG at the image's own size. */
+function maskPngBlob() {
+  const el = document.getElementById("mask-canvas");
+  const out = document.createElement("canvas");
+  out.width = el.width;
+  out.height = el.height;
+  const ctx = out.getContext("2d");
+  ctx.drawImage(el, 0, 0);
+  ctx.globalCompositeOperation = "source-in";
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, out.width, out.height);
+  ctx.globalCompositeOperation = "destination-over";
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, out.width, out.height);
+  return new Promise((resolve) => out.toBlob(resolve, "image/png"));
+}
+
+async function saveMask() {
+  const imageNode = maskTarget;
+  if (!imageNode) return;
+  let filename;
+  try {
+    const stem = String(imageNode.properties[imageNode.uploadComboName]).replace(/\.[^.]+$/, "");
+    filename = await uploadImageFile(new File([await maskPngBlob()], `${stem}_mask.png`, { type: "image/png" }));
+  } catch (err) {
+    showToast(`Saving the mask failed: ${err.message}`, "error");
+    return;
+  }
+  let maskNode = linkedMaskNode(imageNode);
+  if (!maskNode) {
+    maskNode = addNodeToGraph("LoadMask", [imageNode.pos[0], imageNode.pos[1] + imageNode.size[1] + 40]);
+    imageNode.properties[MASK_NODE_PROPERTY] = maskNode.id;
+  }
+  setNodeValue(maskNode, "filename", filename);
+  setNodeValue(maskNode, "channel", "luminance");
+  setNodeValue(maskNode, "invert", false);
+  maskNode.previewImage = null;
+  // Wire it into the inpaint sampler(s) this image feeds, unless one already takes another mask.
+  for (const link of Object.values(graph.links)) {
+    if (link.origin_id !== imageNode.id || link.origin_slot !== 0) continue;
+    const sampler = graph.getNodeById(link.target_id);
+    if (!sampler || sampler.comfyClass !== "KSamplerInpaint") continue;
+    const slot = findInputSlot(sampler, "mask");
+    const current = sampler.inputs[slot].link != null ? graph.links[sampler.inputs[slot].link] : null;
+    if (!current || current.origin_id === imageNode.id || current.origin_id === maskNode.id) maskNode.connect(0, sampler, slot);
+  }
+  closeOverlay("mask-overlay");
+  canvas.setDirty(true, true);
+  scheduleHistoryPush();
+  showToast(`Mask saved as ${filename}`);
+}
+
 // ---- Templates (F18): read-only starter graphs under frontend/templates/ ----
 
 // A template is {nodes: [{id, type, pos, values}], links: [[from id, output slot,
@@ -1705,7 +1878,7 @@ async function openSystemPanel() {
 // ---- Wiring up UI ----
 
 function handleShortcut(e) {
-  for (const id of ["modal-overlay", "workflow-overlay", "template-overlay", "system-overlay", "help-overlay"]) {
+  for (const id of ["modal-overlay", "workflow-overlay", "template-overlay", "mask-overlay", "system-overlay", "help-overlay"]) {
     const overlay = document.getElementById(id);
     if (!overlay.classList.contains("hidden")) {
       if (id !== "modal-overlay") trapFocus(overlay, e);
@@ -1834,6 +2007,7 @@ function initPanels() {
 
 function initUI() {
   initPanels();
+  initMaskEditor();
   document.getElementById("btn-queue").onclick = (e) => queuePrompt({ front: e.shiftKey, count: queueCount() });
   document.getElementById("btn-example").onclick = loadExampleGraph;
   document.getElementById("btn-templates").onclick = openTemplates;

@@ -90,6 +90,13 @@ whole width, and brings it back. The layout is remembered in this browser.
    the input back to a widget (once it's unwired) from the same menu.
    Reroute and Primitive only exist in the editor -- they are resolved when
    the prompt is queued, so the server never runs them.
+10. **Paint a mask** — right-click a Load Image (with an image chosen) and
+   pick **Open in mask editor**: paint over what the inpaint sampler should
+   repaint (Erase undoes strokes, <kbd>[</kbd>/<kbd>]</kbd> change the brush,
+   Shift for bigger steps). **Save mask** uploads it as `<image>_mask.png`
+   into a Load Mask node next to the image (re-opening the editor shows it
+   again and updates that node) and wires it into the KSampler (Inpaint) the
+   image feeds. The Inpaint template is a good starting point.
 
 ## Running a graph
 
