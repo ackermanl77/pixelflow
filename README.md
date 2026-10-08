@@ -114,6 +114,9 @@ push or a real release at all, which just builds and uploads the artifact.
   Blend, Text Overlay — real, CPU-only, Pillow-based operations
 - **output**: Preview Image (throwaway, `temp\`), Save Image (numbered
   `prefix_00001_.png`, subfolders, `%date%`/`%time%`/`%seed%`/`%model%` tokens)
+- **utility**: Reroute and Primitive (drives any widget converted to an
+  input); plus groups, a mask editor, workflow templates and an X/Y plot in
+  the UI -- see `docs/USER_GUIDE.md`
 
 Adding a new node is a single Python class — see `docs/NODE_AUTHORING.md`.
 

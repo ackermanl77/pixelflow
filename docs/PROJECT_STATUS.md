@@ -29,8 +29,9 @@ run normally. It needs only the web dependencies and starts in about a second.
 The port (8288, not ComfyUI's 8188) and the app id live in
 `backend/config.py`; `PIXELFLOW_PORT` overrides the port. In desktop mode, if
 the port is taken by another program a free port is used instead, and if
-another PixelFlow already serves it, the new window simply opens on that
-instance (`desktop.choose_port()`). Closing the window interrupts the running
+another PixelFlow already serves it, the second launch brings the running
+instance's window to the front (restoring it if minimized) instead of opening
+another window (`desktop.choose_port()`, `_focus_existing_window()`). Closing the window interrupts the running
 prompt and lets uvicorn shut down (up to 10 s) so no PNG is cut off.
 
 There is exactly one backend process and one frontend in this project —
@@ -106,7 +107,7 @@ files directly.
     `GET /api/node_aliases`, `GET /api/system` (versions, device, VRAM,
     loaded models, data/models/log folders), `POST /api/free` (unload every
     model and the output cache), `POST /api/logs/open` (open the log folder),
-    `GET /api/models/{checkpoints|loras}`.
+    `GET /api/models/{checkpoints|loras|controlnet|upscale_models}`.
   - `POST /api/queue` (`{"prompt", "extra_data", "front"}`; 400 with
     `{"detail": {"message", "node_id", "class_type", "input"}}`),
     `GET /api/queue`, `DELETE /api/queue` (cancel all pending),
@@ -116,7 +117,8 @@ files directly.
     `DELETE /api/history` (clear finished).
   - `POST /api/upload`, `GET /api/uploads`, `GET /uploads/{name}`,
     `GET /outputs/{path}`, `GET /temp/{name}`, `DELETE /api/outputs/{path}?type=`,
-    `POST /api/outputs/to-upload`.
+    `POST /api/outputs/to-upload`, `POST /api/contact_sheet` (the X/Y plot's
+    labelled grid of finished images).
   - `GET /api/workflows` (`[{name, modified, size}]`),
     `GET|POST|DELETE /api/workflows/{name}` (`?overwrite=false` → 409 when it
     exists), `POST /api/workflows/{name}/rename`. Names are validated (1-100
@@ -141,7 +143,13 @@ files directly.
   Save/Preview nodes; the workflow manager (load/rename/duplicate/delete,
   overwrite prompt, unsaved-changes guard, import of `.json` or a PNG with an
   embedded workflow, also by drop); the System panel (GPU/VRAM in the top
-  bar, Free memory, Open log folder); undo/redo covering nodes, links, moves
+  bar, Free memory, Open log folder); groups (Ctrl+G, mute/bypass a whole
+  group); Reroute and Primitive nodes and widget-to-input conversion; a mask
+  editor on Load Image (paints the mask a Load Mask feeds to the inpaint
+  sampler); the Templates menu (`frontend/templates/*.json`); the X/Y plot
+  (queues a fixed-seed grid of two widget values and assembles a labelled
+  contact sheet); resizable, collapsible side panels (remembered per
+  browser); undo/redo covering nodes, links, moves
   and values (capped at 100, never hijacking Ctrl+Z in text fields); a `?`
   shortcut overlay; accessible dialogs (role, focus trap, focus return).
   Errors are drawn on the failing node; the running-node outline and
@@ -157,14 +165,21 @@ files directly.
 
 - **loaders**: Load Checkpoint (`ckpt_name` combo of installed models plus
   "Other…" for any Hub id; `dtype`), Load LoRA, Load Image (IMAGE + alpha
-  MASK), Load Mask
+  MASK, with an in-app mask editor), Load Mask, Load ControlNet
+  (`models/controlnet/` or a Hub id), Load Upscale Model
+  (`models/upscale_models/`, any architecture spandrel reads)
+- **controlnet**: Apply ControlNet (strength, start/end; chainable) on all
+  three samplers, through diffusers' ControlNet pipelines derived from the
+  loaded one with `from_pipe`
 - **conditioning**: CLIP Text Encode (`(word:1.2)` weighting, long prompts,
   `clip_skip`)
 - **sampling**: KSampler (txt2img), KSampler (Image) (img2img), KSampler
   (Inpaint) — all with `sampler`, `scheduler` (normal/karras/trailing), `seed`,
   `steps`, `cfg`, `batch_size` and an optional `negative`
-- **image** (Pillow): Empty Image, Resize, Blur, Brightness/Contrast,
-  Hue/Saturation, Blend, Text Overlay
+- **image** (Pillow/NumPy): Empty Image, Resize, Blur, Brightness/Contrast,
+  Hue/Saturation, Blend, Text Overlay, Canny Edges (on cv2's threshold
+  scale, for ControlNet); Upscale Image (model) runs a spandrel model tiled
+- **utility** (frontend only): Reroute, Primitive
 - **output**: Preview Image (to `temp/`), Save Image (`prefix_00001_.png`,
   subfolders, `%date%`/`%time%`/`%seed%`/`%model%`)
 
@@ -201,13 +216,18 @@ Generation details (`backend/nodes/generation.py`):
 
 ## Verification
 
-Run on 2026-10-03 in the dev `.venv` (Python 3.14, CUDA torch, RTX 5080):
+Run on 2026-10-07 in the dev `.venv` (Python 3.14, CUDA torch, RTX 5080):
 
 | Command | Result |
 |---|---|
-| `.\.venv\Scripts\python.exe -m pytest -q` | 329 passed, 1 skipped (the opt-in `PIXELFLOW_GPU_SMOKE` sd-turbo test) |
-| `npm test` | 19/19 node:test unit tests pass |
+| `.\.venv\Scripts\python.exe -m pytest -q` | 365 passed, 1 skipped (the opt-in `PIXELFLOW_GPU_SMOKE` sd-turbo test) |
+| `npm test` | 25/25 node:test unit tests pass |
 | `npm run lint` | ESLint clean |
+| `npm run e2e` | 7 Playwright tests pass (the smoke test plus templates, groups, side panels, reroute/primitive, mask editor and a real 2×2 X/Y plot) |
+
+ControlNet was tested end to end with the tiny test checkpoint and a ControlNet
+built from its UNet (no real SD ControlNet was downloaded). The real
+RealESRGAN_x4plus upscales 512 → 2048 px in 0.38 s on the RTX 5080.
 
 `tests/test_frontend_logic.py` also runs the node:test suite, `node --check`
 and a check that every element `app.js` looks up exists in `index.html` when
@@ -229,15 +249,23 @@ and the Playwright smoke test. `release.yml` calls `ci.yml` first.
   inputs in place.
 - **Single global queue.** Every connected window sees every prompt.
 - **No authentication.** Loopback only, with Host/Origin checks.
-- **No in-app mask editor** — make masks as PNG alpha or a grayscale image.
-- **No ControlNet, model upscaler, templates or X/Y plot yet** (report items
-  B7, F18).
+- **ControlNet is checked only with tiny test models** — a real SD 1.5/SDXL
+  ControlNet checkpoint hasn't been run yet. Only Canny is offered as a
+  preprocessor (no depth/pose/lineart).
 - **Frontend tests**: unit tests of `logic.js`, ESLint, and one Playwright
   smoke test (page load, node palette, adding and wiring nodes with the
   mouse, running a torch-free graph, saving and loading a workflow) against
   the backend in test mode. Generation itself, the image viewer, uploads and
   drag-and-drop of files still need a manual pass in a real window.
-- **`torch.compile` is not offered** (needs `triton-windows`, not bundled).
+- **`torch.compile` is opt-in and not bundled** (`{"torch_compile": true |
+  "max-autotune"}` in settings.json or `PIXELFLOW_TORCH_COMPILE`; needs
+  `requirements-compile.txt`'s `triton-windows`, not in the packaged app).
+  Measured with the tiny checkpoint: ~29 s first compile (128 s
+  max-autotune), then ~40 % faster than eager.
+- **Releases aren't code-signed with a trusted certificate yet.**
+  `build_release.ps1 -Sign` works (checked with a self-signed test
+  certificate on 2026-10-07); a real certificate is what removes SmartScreen's
+  warning.
 
 ## Desktop packaging
 
