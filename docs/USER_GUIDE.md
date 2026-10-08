@@ -181,6 +181,20 @@ re-create any single image of a batch.
 - **Canny Edges** (image) — white-on-black edges, the control image a Canny
   ControlNet expects; `low`/`high` (default 100/200, OpenCV's scale) keep
   more or fewer edges.
+- **Depth Map** (image) — near is white, far is black, for a depth
+  ControlNet. Uses Depth Anything V2 Small (about 100 MB, downloaded from
+  the Hugging Face Hub the first time, then cached), on the GPU when there
+  is one; any transformers depth model id can be typed instead.
+- **Soft Edges** (image) — soft, HED-like contours for a SoftEdge/HED
+  ControlNet; higher `detail` keeps finer edges.
+- **Lineart** (image) — thin white lines on black for a lineart ControlNet;
+  `sigma` sets the line scale, `sharpness` how solid the lines are.
+- **Scribble** (image) — thick pure-white strokes from the main contours
+  for a scribble ControlNet; `threshold` and `thickness` tune them.
+- Soft Edges, Lineart and Scribble are classical filters (no model): close
+  enough to guide those ControlNets, though the learned annotators they were
+  trained on draw cleaner lines on busy photos. Templates > **ControlNet
+  (Depth)** wires Depth Map into an SD 2.1 depth ControlNet.
 
 ### conditioning
 

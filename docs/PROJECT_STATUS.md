@@ -177,8 +177,11 @@ files directly.
   (Inpaint) — all with `sampler`, `scheduler` (normal/karras/trailing), `seed`,
   `steps`, `cfg`, `batch_size` and an optional `negative`
 - **image** (Pillow/NumPy): Empty Image, Resize, Blur, Brightness/Contrast,
-  Hue/Saturation, Blend, Text Overlay, Canny Edges (on cv2's threshold
-  scale, for ControlNet); Upscale Image (model) runs a spandrel model tiled
+  Hue/Saturation, Blend, Text Overlay, and the ControlNet preprocessors
+  Canny Edges (on cv2's threshold scale), Depth Map (Depth Anything V2
+  Small through transformers, downloaded on first use; 0.01 s per image warm
+  on the RTX 5080), Soft Edges, Lineart (XDoG) and Scribble
+  (`backend/nodes/preprocessors.py`); Upscale Image (model) runs a spandrel model tiled
 - **utility** (frontend only): Reroute, Primitive
 - **output**: Preview Image (to `temp/`), Save Image (`prefix_00001_.png`,
   subfolders, `%date%`/`%time%`/`%seed%`/`%model%`)
@@ -250,8 +253,10 @@ and the Playwright smoke test. `release.yml` calls `ci.yml` first.
 - **Single global queue.** Every connected window sees every prompt.
 - **No authentication.** Loopback only, with Host/Origin checks.
 - **ControlNet is checked only with tiny test models** — a real SD 1.5/SDXL
-  ControlNet checkpoint hasn't been run yet. Only Canny is offered as a
-  preprocessor (no depth/pose/lineart).
+  ControlNet checkpoint hasn't been run yet. The Depth Map preprocessor was
+  run with the real Depth Anything V2 Small model; Soft Edges, Lineart and
+  Scribble are classical approximations of the learned annotators. No pose
+  (OpenPose) preprocessor.
 - **Frontend tests**: unit tests of `logic.js`, ESLint, and one Playwright
   smoke test (page load, node palette, adding and wiring nodes with the
   mouse, running a torch-free graph, saving and loading a workflow) against

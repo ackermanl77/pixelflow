@@ -29,6 +29,11 @@
       "file": "controlnet_canny.json",
       "title": "ControlNet (Canny)",
       "description": "Follow the edges of an uploaded image (an SD 2.1 Canny ControlNet for sd-turbo, downloaded on first use)."
+    },
+    {
+      "file": "controlnet_depth.json",
+      "title": "ControlNet (Depth)",
+      "description": "Keep the layout and depth of an uploaded image (Depth Anything V2 for the depth map, an SD 2.1 depth ControlNet for sd-turbo; both downloaded on first use)."
     }
   ]
 }
