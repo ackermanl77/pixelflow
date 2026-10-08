@@ -223,7 +223,7 @@ Run on 2026-10-07 in the dev `.venv` (Python 3.14, CUDA torch, RTX 5080):
 
 | Command | Result |
 |---|---|
-| `.\.venv\Scripts\python.exe -m pytest -q` | 365 passed, 1 skipped (the opt-in `PIXELFLOW_GPU_SMOKE` sd-turbo test) |
+| `.\.venv\Scripts\python.exe -m pytest -q` | 374 passed, 1 skipped (the opt-in `PIXELFLOW_GPU_SMOKE` sd-turbo test) |
 | `npm test` | 25/25 node:test unit tests pass |
 | `npm run lint` | ESLint clean |
 | `npm run e2e` | 7 Playwright tests pass (the smoke test plus templates, groups, side panels, reroute/primitive, mask editor and a real 2×2 X/Y plot) |
