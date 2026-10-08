@@ -35,11 +35,13 @@ jobs:
           cache-dependency-path: requirements.txt
 
       # Install the CPU-only torch wheel first so requirements.txt's torch requirement is already
-      # satisfied and pip doesn't pull the multi-GB CUDA build onto a GPU-less runner.
+      # satisfied and pip doesn't pull the multi-GB CUDA build onto a GPU-less runner. torchvision
+      # (spandrel needs it) comes from the same index: Linux PyPI's torchvision is built for the
+      # CUDA torch and fails to import next to the CPU one ("operator torchvision::nms does not exist").
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -r requirements.txt pytest httpx
 
       # Cache the tiny test checkpoint (hf-internal-testing/tiny-stable-diffusion-torch) the
