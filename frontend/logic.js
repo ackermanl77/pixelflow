@@ -372,6 +372,25 @@
     return Math.min(1, Math.max(0, (Math.max(1, nodeIndex) - 1 + within) / nodeCount));
   }
 
+  // ---- Per-window queue ----
+
+  /** Whether a prompt is this window's: queued with its client id, or with
+   * none at all (the API, scripts, history from before client ids -- those
+   * belong to every window). An entry not known yet counts as ours. */
+  function isOwnPrompt(entry, clientId) {
+    return !entry || !entry.client_id || entry.client_id === clientId;
+  }
+
+  /** The history entries a window shows: its own, or all of them. */
+  function visibleHistory(history, clientId, showAll) {
+    if (showAll) return history || {};
+    const out = {};
+    for (const [promptId, entry] of Object.entries(history || {})) {
+      if (isOwnPrompt(entry, clientId)) out[promptId] = entry;
+    }
+    return out;
+  }
+
   // ---- Gallery (F9) ----
 
   /** Gallery items from history, oldest first, with what the lightbox
@@ -571,6 +590,8 @@
     progressText,
     overallProgress,
     galleryItems,
+    isOwnPrompt,
+    visibleHistory,
     promptMetadata,
     imageUrl,
     stepIndex,

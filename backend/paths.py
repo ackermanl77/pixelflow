@@ -97,6 +97,8 @@ CONTROLNET_DIR = MODELS_DIR / "controlnet"
 UPSCALE_MODEL_DIR = MODELS_DIR / "upscale_models"
 # Finished prompts, one JSON object per line (see engine/queue.py).
 HISTORY_PATH = ROOT_DIR / "history.jsonl"
+# The output cache's copy on disk (engine.disk_cache): the last run's node outputs.
+OUTPUT_CACHE_DIR = ROOT_DIR / "cache" / "outputs"
 # Rotating log files (see backend/logging_setup.py); created on first use.
 LOG_DIR = ROOT_DIR / "logs"
 

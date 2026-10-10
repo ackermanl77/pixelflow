@@ -86,6 +86,9 @@ async def lifespan(_app: FastAPI):
     restored = queue.load_history()
     if restored:
         logger.info("restored %d history entries from %s", restored, queue.history_path)
+    cached = queue.output_cache.attach_disk(paths.OUTPUT_CACHE_DIR, app_version())
+    if cached:
+        logger.info("found %d cached node outputs in %s", cached, paths.OUTPUT_CACHE_DIR)
     queue.start()
     if test_mode():
         logger.warning("test mode (PIXELFLOW_TEST_MODE): torch is not loaded and models can't be")
@@ -122,6 +125,8 @@ class QueueRequest(BaseModel):
     extra_data: Dict[str, Any] = Field(default_factory=dict)
     # Run before everything already pending (Ctrl+Shift+Enter).
     front: bool = False
+    # The browser window queueing it (each window shows its own prompts).
+    client_id: Optional[str] = Field(None, max_length=64)
 
 
 class WorkflowPayload(BaseModel):
@@ -191,7 +196,7 @@ async def post_queue(request: QueueRequest):
     extra_pnginfo = request.extra_data.get("extra_pnginfo") or {}
     if not isinstance(extra_pnginfo, dict):
         raise HTTPException(400, "'extra_data.extra_pnginfo' must be an object")
-    prompt_id = await queue.submit(prompt, extra_pnginfo, front=request.front)
+    prompt_id = await queue.submit(prompt, extra_pnginfo, front=request.front, client_id=request.client_id)
     return {"prompt_id": prompt_id}
 
 
@@ -215,9 +220,10 @@ async def get_queue():
 
 
 @app.delete("/api/queue")
-async def cancel_all_pending():
-    """Cancel every prompt that hasn't started yet."""
-    cancelled = queue.cancel_all()
+async def cancel_all_pending(client_id: Optional[str] = Query(None, max_length=64)):
+    """Cancel every prompt that hasn't started yet (only `client_id`'s
+    prompts, plus those queued without one, when given)."""
+    cancelled = queue.cancel_all(client_id)
     for prompt_id in cancelled:
         await manager.broadcast({"type": "execution_cancelled", "prompt_id": prompt_id})
     return {"cancelled": cancelled}
@@ -234,9 +240,10 @@ async def get_history(
 
 
 @app.delete("/api/history")
-async def clear_finished_history():
-    """Delete every finished entry (queued/running ones stay)."""
-    return {"deleted": queue.clear_finished()}
+async def clear_finished_history(client_id: Optional[str] = Query(None, max_length=64)):
+    """Delete every finished entry (queued/running ones stay); only
+    `client_id`'s, plus those queued without one, when given."""
+    return {"deleted": queue.clear_finished(client_id)}
 
 
 @app.get("/api/history/{prompt_id}")
@@ -503,6 +510,9 @@ def free_models():
     (e.g. to use the GPU for something else)."""
     unloaded = models.PIPELINES.clear()
     queue.output_cache.clear()
+    from .nodes import generation
+
+    generation.clear_prompt_cache()
     runtime.free_memory()
     return {"unloaded": unloaded}
 

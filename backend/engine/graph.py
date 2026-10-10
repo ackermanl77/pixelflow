@@ -4,6 +4,7 @@ import inspect
 import json
 import logging
 import math
+import threading
 import time
 import traceback
 import uuid
@@ -360,33 +361,78 @@ class OutputCache:
     memory. Output nodes are never cached, and classes with
     CACHE_OUTPUTS = False (LoadCheckpoint, whose pipelines live in their
     own LRU) aren't stored.
+
+    With attach_disk(), the entries are also written to a folder (in the
+    background, see engine.disk_cache) and the ones found there at startup
+    are loaded on their first match, so the cache survives a restart.
     """
 
     def __init__(self) -> None:
         self._entries: Dict[str, CacheEntry] = {}
+        # Entries on disk not loaded yet: node id -> signature.
+        self._on_disk: Dict[str, str] = {}
+        self._store: Any = None
+        self._lock = threading.Lock()
+
+    def attach_disk(self, root, version: str) -> int:
+        """Keep the cache in `root` too; returns how many entries were found
+        there (from a previous run of the same app version)."""
+        from .disk_cache import DiskStore
+
+        with self._lock:
+            self._store = DiskStore(root, version)
+            found = self._store.load_manifest()
+            self._on_disk = {node_id: sig for node_id, sig in found.items() if node_id not in self._entries}
+            return len(self._on_disk)
 
     def get(self, node_id: str, signature: str) -> Optional[Tuple[Tuple[Any, ...], Optional[Dict[str, Any]]]]:
-        entry = self._entries.get(node_id)
-        if entry is not None and entry[0] == signature:
-            return entry[1], entry[2]
-        return None
+        with self._lock:
+            entry = self._entries.get(node_id)
+            if entry is not None and entry[0] == signature:
+                return entry[1], entry[2]
+            if self._store is None or self._on_disk.get(node_id) != signature:
+                return None
+            hit = self._store.read(signature)
+            if hit is None:
+                del self._on_disk[node_id]
+                return None
+            self._entries[node_id] = (signature, hit[0], hit[1])
+            del self._on_disk[node_id]
+            return hit
 
     def commit(self, entries: Dict[str, CacheEntry], complete: bool) -> None:
         """Replace the cache with a finished run's entries (`complete`), or
         merge a failed/interrupted run's entries over the existing ones."""
-        if complete:
-            self._entries = dict(entries)
-        else:
-            self._entries.update(entries)
+        with self._lock:
+            if complete:
+                self._entries = dict(entries)
+                self._on_disk = {}
+            else:
+                self._entries.update(entries)
+                for node_id in entries:
+                    self._on_disk.pop(node_id, None)
+            if self._store is not None:
+                snapshot: Dict[str, Any] = {node_id: (sig, None) for node_id, sig in self._on_disk.items()}
+                snapshot.update({node_id: (e[0], (e[1], e[2])) for node_id, e in self._entries.items()})
+                self._store.save(snapshot)
 
     def clear(self) -> None:
-        self._entries.clear()
+        with self._lock:
+            self._entries.clear()
+            self._on_disk.clear()
+            if self._store is not None:
+                self._store.clear()
+
+    def flush(self) -> None:
+        """Wait until everything committed so far is on disk."""
+        if self._store is not None:
+            self._store.flush()
 
     def __len__(self) -> int:
-        return len(self._entries)
+        return len(self._entries) + len(self._on_disk)
 
     def __contains__(self, node_id: object) -> bool:
-        return node_id in self._entries
+        return node_id in self._entries or node_id in self._on_disk
 
 
 def _is_changed_token(node_cls, literal_inputs: Dict[str, Any]) -> Any:

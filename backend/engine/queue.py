@@ -139,16 +139,24 @@ class ExecutionQueue:
         self._record_history(prompt_id, {"status": "cancelled", "finished_at": time.time()})
         return True
 
-    def cancel_all(self) -> List[str]:
-        """Cancel every still-queued prompt; returns their ids."""
-        cancelled = [pid for pid, e in list(self.history.items()) if e.get("status") == "queued"]
+    def cancel_all(self, client_id: Optional[str] = None) -> List[str]:
+        """Cancel every still-queued prompt (only `client_id`'s, when given);
+        returns their ids."""
+        cancelled = [
+            pid for pid, e in list(self.history.items())
+            if e.get("status") == "queued" and _belongs_to(e, client_id)
+        ]
         for pid in cancelled:
             self.cancel(pid)
         return cancelled
 
-    def clear_finished(self) -> List[str]:
-        """Delete every finished history entry; returns their ids."""
-        finished = [pid for pid, e in list(self.history.items()) if e.get("status") in TERMINAL_STATUSES]
+    def clear_finished(self, client_id: Optional[str] = None) -> List[str]:
+        """Delete every finished history entry (only `client_id`'s, when
+        given); returns their ids."""
+        finished = [
+            pid for pid, e in list(self.history.items())
+            if e.get("status") in TERMINAL_STATUSES and _belongs_to(e, client_id)
+        ]
         for pid in finished:
             self.delete_history(pid)
         return finished
@@ -264,19 +272,27 @@ class ExecutionQueue:
             self._worker_task = asyncio.create_task(self._worker())
 
     async def submit(
-        self, prompt: Dict[str, Any], extra_pnginfo: Optional[Dict[str, Any]] = None, front: bool = False
+        self,
+        prompt: Dict[str, Any],
+        extra_pnginfo: Optional[Dict[str, Any]] = None,
+        front: bool = False,
+        client_id: Optional[str] = None,
     ) -> str:
         """Queue a prompt (at the front with `front`). `extra_pnginfo` (e.g.
         {"workflow": <litegraph graph>}) is embedded into saved PNGs
-        alongside the prompt itself."""
+        alongside the prompt itself. `client_id` names the browser window
+        that queued it: it's kept in the history entry and sent with the
+        "queued" message, so each window can show just its own prompts."""
         prompt_id = uuid.uuid4().hex[:12]
         extra_pnginfo = extra_pnginfo or {}
         entry: Dict[str, Any] = {"status": "queued", "prompt": prompt, "queued_at": time.time()}
         if "workflow" in extra_pnginfo:
             entry["workflow"] = extra_pnginfo["workflow"]
+        if client_id:
+            entry["client_id"] = client_id
         self._record_history(prompt_id, entry)
         await self.pending.put((prompt_id, prompt, extra_pnginfo), front=front)
-        await self.manager.broadcast({"type": "queued", "prompt_id": prompt_id})
+        await self.manager.broadcast({"type": "queued", "prompt_id": prompt_id, "client_id": client_id})
         return prompt_id
 
     async def _worker(self) -> None:
@@ -365,6 +381,13 @@ class ExecutionQueue:
                 self.running_prompt_id = None
                 self._interrupt_event.clear()
                 self.pending.task_done()
+
+
+def _belongs_to(entry: Dict[str, Any], client_id: Optional[str]) -> bool:
+    """Whether a history entry is `client_id`'s (any entry when client_id is
+    None). Prompts queued without a client id (the API, scripts, entries
+    from before client ids) belong to every window."""
+    return client_id is None or entry.get("client_id") in (None, client_id)
 
 
 def _error_details(exc: BaseException) -> Dict[str, Any]:

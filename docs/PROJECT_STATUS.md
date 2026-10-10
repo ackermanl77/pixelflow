@@ -43,7 +43,7 @@ files directly.
 - **Bundled/read-only** (`frontend/`) — `sys._MEIPASS` when frozen, the repo
   otherwise.
 - **Writable data** (`outputs/`, `uploads/`, `workflows/`, `temp/`,
-  `history.jsonl`, `logs/`, `settings.json`) — the first of:
+  `history.jsonl`, `cache/outputs/`, `logs/`, `settings.json`) — the first of:
   `PIXELFLOW_HOME`; the project folder when running from source; the exe's
   folder when it holds a `portable.txt` marker (or data from an older
   version — an `outputs` folder or `history.jsonl`); otherwise
@@ -88,7 +88,12 @@ files directly.
   values outside its list. `execute_prompt()` resolves the prompt from the
   output nodes; with an `OutputCache` a node whose signature (class, widget
   values, upstream signatures, `IS_CHANGED()`) matches the previous run is
-  reused. Node exceptions become `NodeExecutionError`. Nodes that take
+  reused. `OutputCache.attach_disk()` (done at startup) also keeps it in
+  `cache/outputs/` (`backend/engine/disk_cache.py`): one folder per
+  signature with PNG/`.npy`/JSON files, never pickle, written on a background
+  thread, read back lazily on a signature match after a restart, discarded
+  when the app version changes; outputs that aren't plain data (a MODEL, a
+  CONTROL_NET) stay in memory only. Node exceptions become `NodeExecutionError`. Nodes that take
   `on_progress` get a callback that adds `it_per_s`/`eta_s` and forwards
   live previews when the caller passes `on_progress_detail`.
 - **`backend/engine/queue.py`** — a single-worker async queue (a deque, so
@@ -101,6 +106,12 @@ files directly.
   record the prompt, the workflow, status, outputs/error and timestamps;
   finished entries are appended to `history.jsonl` and the newest 200 are
   restored at startup. `interrupt(prompt_id)` only stops that prompt.
+  A prompt queued with a `client_id` (each browser window sends its own,
+  kept in `sessionStorage`) keeps it in its history entry and the `queued`
+  message; `DELETE /api/queue` and `DELETE /api/history` take an optional
+  `?client_id=` to act on that window's prompts (plus those queued without
+  one). The frontend shows only its own prompts, progress, previews and
+  images unless **All windows** is ticked.
 - **`backend/main.py`** — the FastAPI app (lifespan startup: logging, data
   folders, emptying `temp/`, restoring history, warming torch up):
   - `GET /api/health` (`{"app", "status", "version"}`), `GET /api/nodes`,
@@ -223,10 +234,10 @@ Run on 2026-10-07 in the dev `.venv` (Python 3.14, CUDA torch, RTX 5080):
 
 | Command | Result |
 |---|---|
-| `.\.venv\Scripts\python.exe -m pytest -q` | 374 passed, 1 skipped (the opt-in `PIXELFLOW_GPU_SMOKE` sd-turbo test) |
-| `npm test` | 25/25 node:test unit tests pass |
+| `.\.venv\Scripts\python.exe -m pytest -q` | 384 passed, 1 skipped (the opt-in `PIXELFLOW_GPU_SMOKE` sd-turbo test) — 2026-10-09 |
+| `npm test` | 26/26 node:test unit tests pass |
 | `npm run lint` | ESLint clean |
-| `npm run e2e` | 7 Playwright tests pass (the smoke test plus templates, groups, side panels, reroute/primitive, mask editor and a real 2×2 X/Y plot) |
+| `npm run e2e` | 8 Playwright tests pass (the smoke test plus templates, groups, side panels, reroute/primitive, mask editor, a real 2×2 X/Y plot and two windows' queues) |
 
 ControlNet was tested end to end with the tiny test checkpoint and a ControlNet
 built from its UNet (no real SD ControlNet was downloaded). The real
@@ -246,11 +257,18 @@ and the Playwright smoke test. `release.yml` calls `ci.yml` first.
   encoding (weighting, long prompts, clip skip) matches diffusers' own for
   plain prompts with tiny test encoders, but how weighted/long prompts look
   with real SDXL/SD3/Flux checkpoints still needs a manual check. Encoded
-  prompts aren't cached between runs. Flux/SD3 latents get no live preview.
-- **The output cache is in memory only** and holds the last run's node
-  outputs (images); it's lost on restart. Nodes must not mutate their
-  inputs in place.
-- **Single global queue.** Every connected window sees every prompt.
+  prompts are cached between runs (16 entries, per model and LoRA set;
+  cleared by Free memory) — checked bit-identical against the text path with
+  a tiny SD model, not with the big encoders. SD3/Flux live previews use
+  ComfyUI's 16-channel latent2rgb factors (Flux latents unpacked like
+  diffusers does) — the colours haven't been seen with real weights.
+- **The output cache holds the last run's node outputs** (in memory and in
+  `cache/outputs/`, so a restart keeps it). A new app version starts it
+  empty, but from source the version is always "dev": after changing a
+  node's code, use **Free memory** (or delete the folder) so stale outputs
+  aren't reused. Nodes must not mutate their inputs in place.
+- **Single worker.** Each window shows its own prompts, but they all share
+  one queue and run one at a time.
 - **No authentication.** Loopback only, with Host/Origin checks.
 - **ControlNet is checked only with tiny test models** — a real SD 1.5/SDXL
   ControlNet checkpoint hasn't been run yet. The Depth Map preprocessor was

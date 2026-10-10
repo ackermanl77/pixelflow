@@ -149,3 +149,14 @@ test("firstImage prefers saved outputs over previews", () => {
   assert.deepEqual(L.firstImage({ 3: { images: ["p.png"], type: "temp" }, 5: { images: ["s.png", "t.png"], type: "output" } }), { filename: "s.png", type: "output" });
   assert.deepEqual(L.firstImage({ 3: { images: ["p.png"], type: "temp" } }), { filename: "p.png", type: "temp" });
 });
+
+test("a window shows its own prompts, window-less ones, or all of them", () => {
+  assert.equal(L.isOwnPrompt({ client_id: "a" }, "a"), true);
+  assert.equal(L.isOwnPrompt({ client_id: "b" }, "a"), false);
+  assert.equal(L.isOwnPrompt({ status: "completed" }, "a"), true); // API / old history: everyone's
+  assert.equal(L.isOwnPrompt(undefined, "a"), true); // not known yet: assume ours
+  const history = { p1: { client_id: "a" }, p2: { client_id: "b" }, p3: {} };
+  assert.deepEqual(Object.keys(L.visibleHistory(history, "a", false)), ["p1", "p3"]);
+  assert.deepEqual(Object.keys(L.visibleHistory(history, "a", true)), ["p1", "p2", "p3"]);
+  assert.deepEqual(L.visibleHistory(null, "a", false), {});
+});

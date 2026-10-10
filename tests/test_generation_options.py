@@ -245,8 +245,23 @@ def test_lora_node_lists_models_loras(lora_files):
 def test_latent_preview_projects_four_channel_latents():
     image = latent_preview.latents_to_image(torch.zeros(1, 4, 8, 12))
     assert image.mode == "RGB" and max(image.size) == latent_preview.MAX_PREVIEW_SIDE
-    assert latent_preview.latents_to_image(torch.zeros(1, 16, 8, 8)) is None
+    assert latent_preview.latents_to_image(torch.zeros(1, 8, 8, 8)) is None
     assert latent_preview.to_data_url(image).startswith("data:image/jpeg;base64,")
+
+
+def test_latent_preview_covers_sd3_and_packed_flux_latents():
+    # SD3: 16 channels; zero latents come out as the factors' bias colour.
+    sd3 = latent_preview.latents_to_image(torch.zeros(1, 16, 96, 64), "sd3")
+    assert sd3.size == (171, 256)
+    assert sd3.getpixel((0, 0)) == tuple(round(b * 255) for b in (0.2394, 0.2135, 0.1925))
+    # Flux packs 2x2 patches of 16 channels into 64 per token (diffusers' _pack_latents layout).
+    grid = torch.randn(1, 16, 96, 64)
+    packed = grid.view(1, 16, 48, 2, 32, 2).permute(0, 2, 4, 1, 3, 5).reshape(1, 48 * 32, 64)
+    assert torch.equal(latent_preview.unpack_flux_latents(packed, 512, 768), grid)
+    assert latent_preview.latents_to_image(packed, "flux", 512, 768).size == (171, 256)
+    # Without the right image size there's nothing to unpack: no preview, no error.
+    assert latent_preview.latents_to_image(packed, "flux", 512, 512) is None
+    assert latent_preview.latents_to_image(packed, "flux") is None
 
 
 def test_progress_detail_carries_previews_and_speed(output_dir, monkeypatch):

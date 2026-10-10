@@ -72,6 +72,30 @@ def test_cancel_all_pending_and_clear_finished(client, fresh_queue):
     assert client.get("/api/history").json() == {}
 
 
+def test_prompts_carry_their_window_and_cancel_all_can_stay_in_it(client, fresh_queue):
+    messages = []
+
+    async def _record(message):
+        messages.append(message)
+
+    fresh_queue.manager.broadcast = _record
+    mine = client.post("/api/queue", json={"prompt": PROMPT, "client_id": "win-a"}).json()["prompt_id"]
+    theirs = client.post("/api/queue", json={"prompt": PROMPT, "client_id": "win-b"}).json()["prompt_id"]
+    shared = client.post("/api/queue", json={"prompt": PROMPT}).json()["prompt_id"]  # an API client: no window
+    history = client.get("/api/history").json()
+    assert history[mine]["client_id"] == "win-a" and history[theirs]["client_id"] == "win-b"
+    assert "client_id" not in history[shared]
+    assert {m["prompt_id"]: m["client_id"] for m in messages if m["type"] == "queued"} == {
+        mine: "win-a", theirs: "win-b", shared: None,
+    }
+    # Window A's Cancel all: its own prompt and the window-less one, never window B's.
+    assert set(client.delete("/api/queue?client_id=win-a").json()["cancelled"]) == {mine, shared}
+    assert client.get("/api/queue").json()["pending"] == [theirs]
+    assert client.delete("/api/history?client_id=win-a").json()["deleted"] == [mine, shared]
+    assert list(client.get("/api/history").json()) == [theirs]
+    assert client.post("/api/queue", json={"prompt": PROMPT, "client_id": "x" * 65}).status_code == 422
+
+
 def test_history_lifecycle_through_the_real_worker(output_dir):
     """queued -> running -> completed with timestamps, outputs and the
     executing/progress messages (report item T2)."""

@@ -140,10 +140,56 @@ def test_flux_weighting_reaches_t5(flux):
 # ---- routing in the samplers ----
 
 
-def test_plain_short_prompts_stay_plain_text(sdxl, sd3, flux):
+def test_plain_prompts_are_the_pipelines_own_encoding(sdxl, sd3, flux):
+    """No weighting, no long prompt: the embeddings are exactly the pipeline's own encode_prompt()
+    -- what pipe() would compute from the text -- so they can be cached between runs."""
+    generation.clear_prompt_cache()
+    references = {
+        "sdxl": sdxl.encode_prompt("a cat", None, device=CPU, num_images_per_prompt=1, do_classifier_free_guidance=True,
+                                   negative_prompt="ugly"),
+        "sd3": _sd3_reference(sd3, "a cat", "ugly"),
+        "flux": flux.encode_prompt("a cat", None, device=CPU)[:2],
+    }
     for arch, pipe in (("sdxl", sdxl), ("sd3", sd3), ("flux", flux)):
         kwargs = generation._prompt_kwargs({"arch": arch, "pipeline": pipe}, pipe, {"text": "a cat"}, {"text": "ugly"}, 1)
-        assert kwargs["prompt"] == "a cat" and kwargs["negative_prompt"] == "ugly" and "prompt_embeds" not in kwargs
+        assert "prompt" not in kwargs
+        names = (["prompt_embeds", "pooled_prompt_embeds"] if arch == "flux" else
+                 ["prompt_embeds", "negative_prompt_embeds", "pooled_prompt_embeds", "negative_pooled_prompt_embeds"])
+        for name, reference in zip(names, references[arch]):
+            assert torch.equal(kwargs[name], reference), (arch, name)
+
+
+def test_encoded_prompts_are_reused_until_the_prompt_or_loras_change(sdxl, monkeypatch):
+    generation.clear_prompt_cache()
+    calls = []
+    original = sdxl.encode_prompt
+
+    def counting(*args, **kwargs):
+        calls.append(args[0])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sdxl, "encode_prompt", counting)
+    monkeypatch.setattr(generation, "apply_loras", lambda pipe, loras: None)
+    model = {"arch": "sdxl", "pipeline": sdxl}
+    first = generation._prompt_kwargs(model, sdxl, {"text": "a cat"}, None, 1)
+    again = generation._prompt_kwargs(model, sdxl, {"text": "a cat"}, None, 2)  # e.g. a new seed, two images
+    assert calls == ["a cat"] and torch.equal(again["prompt_embeds"][1], first["prompt_embeds"][0])
+    generation._prompt_kwargs(model, sdxl, {"text": "a dog"}, None, 1)
+    generation._prompt_kwargs(dict(model, loras=[("style.safetensors", 0.8)]), sdxl, {"text": "a cat"}, None, 1)
+    assert calls == ["a cat", "a dog", "a cat"]  # a LoRA can change the text encoder: encoded again
+    generation.clear_prompt_cache()
+    generation._prompt_kwargs(model, sdxl, {"text": "a cat"}, None, 1)
+    assert len(calls) == 4
+
+
+def test_loras_are_applied_before_the_prompt_is_encoded(sdxl, monkeypatch):
+    generation.clear_prompt_cache()
+    order = []
+    monkeypatch.setattr(generation, "apply_loras", lambda pipe, loras: order.append(("loras", tuple(loras))))
+    monkeypatch.setattr(prompt_weights, "encode_conditioning",
+                        lambda *a, **k: order.append(("encode",)) or {"prompt_embeds": torch.zeros(1, 2, 3)})
+    generation._prompt_kwargs({"arch": "sdxl", "pipeline": sdxl, "loras": [("x", 1.0)]}, sdxl, {"text": "a (cat:1.2)"}, None, 1)
+    assert order == [("loras", (("x", 1.0),)), ("encode",)]
 
 
 @pytest.mark.parametrize(

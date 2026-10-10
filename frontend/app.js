@@ -659,7 +659,7 @@ async function submitPrompt(front) {
       headers: { "Content-Type": "application/json" },
       // The litegraph workflow rides along so Save/Preview Image can embed it
       // in the PNG (ComfyUI's extra_data.extra_pnginfo shape).
-      body: JSON.stringify({ prompt: execPrompt, front, extra_data: { extra_pnginfo: { workflow: graph.serialize() } } }),
+      body: JSON.stringify({ prompt: execPrompt, front, client_id: CLIENT_ID, extra_data: { extra_pnginfo: { workflow: graph.serialize() } } }),
     });
   } catch (err) {
     showToast(`Could not reach the server: ${err.message}`, "error");
@@ -675,7 +675,7 @@ async function submitPrompt(front) {
   // A quick run's WebSocket messages can arrive before this response: don't
   // turn its "running"/"completed" back into "queued".
   if (!queueState.entries.has(data.prompt_id)) {
-    queueState.entries.set(data.prompt_id, { status: "queued", queued_at: Date.now() / 1000 });
+    queueState.entries.set(data.prompt_id, { status: "queued", queued_at: Date.now() / 1000, client_id: CLIENT_ID });
     if (front) queueState.pending.unshift(data.prompt_id);
     else if (!queueState.pending.includes(data.prompt_id)) queueState.pending.push(data.prompt_id);
   }
@@ -684,6 +684,47 @@ async function submitPrompt(front) {
 }
 
 // ---- Queue panel (F8) ----
+
+// Every window (tab) has its own client id, kept across reloads in
+// sessionStorage: it rides along with each queued prompt, so a window shows
+// its own prompts, progress and images -- other windows' only with "All
+// windows" -- and never marks its canvas with another window's node ids.
+const CLIENT_ID_KEY = "pixelflow-client-id";
+const SHOW_ALL_WINDOWS_KEY = "pixelflow-queue-all-windows";
+const CLIENT_ID = (() => {
+  const fresh = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`).replace(/[^0-9a-z]/gi, "").slice(0, 32);
+  try {
+    let id = sessionStorage.getItem(CLIENT_ID_KEY);
+    if (!id) {
+      id = fresh();
+      sessionStorage.setItem(CLIENT_ID_KEY, id);
+    }
+    return id;
+  } catch (_) {
+    return fresh();
+  }
+})();
+let showAllWindows = false;
+try {
+  showAllWindows = localStorage.getItem(SHOW_ALL_WINDOWS_KEY) === "1";
+} catch (_) { /* storage blocked: default view */ }
+
+function isMine(promptId) {
+  return Logic.isOwnPrompt(queueState.entries.get(promptId) || historyCache.get(promptId), CLIENT_ID);
+}
+
+function isShown(promptId) {
+  return showAllWindows || isMine(promptId);
+}
+
+function setShowAllWindows(value) {
+  showAllWindows = value;
+  try {
+    localStorage.setItem(SHOW_ALL_WINDOWS_KEY, value ? "1" : "0");
+  } catch (_) { /* not remembered */ }
+  renderAllQueueRows();
+  setGallery(Logic.galleryItems(Logic.visibleHistory(Object.fromEntries(historyCache), CLIENT_ID, showAllWindows)));
+}
 
 const queueState = {
   entries: new Map(), // prompt id -> {status, queued_at, started_at, finished_at, error, class_type, outputs}
@@ -700,6 +741,8 @@ function renderQueueRow(promptId) {
     document.getElementById("queue-list").prepend(el);
     queueState.rows.set(promptId, el);
   }
+  el.hidden = !isShown(promptId);
+  el.classList.toggle("foreign", !isMine(promptId));
   // Server-provided text (error messages, filenames, prompt ids) is only
   // ever inserted via textContent, never innerHTML.
   const [statusClass, text] = Logic.statusRow(promptId, entry, entry.status === "running");
@@ -709,7 +752,8 @@ function renderQueueRow(promptId) {
   label.textContent = entry.runningText || text;
   const detail = document.createElement("small");
   detail.className = "queue-detail";
-  detail.textContent = Logic.queueDetail(entry, queueState.pending.indexOf(promptId), Date.now() / 1000);
+  detail.textContent = Logic.queueDetail(entry, queueState.pending.indexOf(promptId), Date.now() / 1000)
+    + (isMine(promptId) ? "" : " · another window");
   el.append(label, detail);
   if (entry.status === "queued") {
     el.appendChild(queueActionButton("Cancel", "Remove from the queue", () => cancelQueued(promptId)));
@@ -767,14 +811,19 @@ async function interruptRunning(promptId) {
   if (res.status === 409) showToast("That prompt is no longer running.");
 }
 
+// Without "All windows", Cancel all / Clear finished leave other windows' prompts alone.
+function scopeQuery() {
+  return showAllWindows ? "" : `?client_id=${encodeURIComponent(CLIENT_ID)}`;
+}
+
 async function cancelAllPending() {
-  const res = await fetch("/api/queue", { method: "DELETE" });
+  const res = await fetch(`/api/queue${scopeQuery()}`, { method: "DELETE" });
   if (!res.ok) return;
   for (const promptId of (await res.json()).cancelled) updateQueueEntry(promptId, { status: "cancelled" });
 }
 
 async function clearFinished() {
-  const res = await fetch("/api/history", { method: "DELETE" });
+  const res = await fetch(`/api/history${scopeQuery()}`, { method: "DELETE" });
   if (!res.ok) return;
   for (const promptId of (await res.json()).deleted) {
     const row = queueState.rows.get(promptId);
@@ -1070,8 +1119,8 @@ async function resyncState() {
       queueState.entries.set(promptId, { ...entry, status: promptId === serverQueue.running ? "running" : entry.status });
       renderQueueRow(promptId);
     }
-    setGallery(Logic.galleryItems(historyEntries));
-    if (!serverQueue.running) hideProgress();
+    setGallery(Logic.galleryItems(Logic.visibleHistory(historyEntries, CLIENT_ID, showAllWindows)));
+    if (!serverQueue.running || !isMine(serverQueue.running)) hideProgress();
   } catch (err) {
     console.warn("could not re-sync queue/history", err);
   }
@@ -1089,15 +1138,19 @@ let reconnectAttempt = 0;
 
 async function onExecutionSuccess(msg) {
   updateQueueEntry(msg.prompt_id, { status: "completed", outputs: msg.outputs, finished_at: Date.now() / 1000 });
-  hideProgress();
+  const mine = isMine(msg.prompt_id);
+  if (mine) hideProgress();
   const entry = await historyEntry(msg.prompt_id);
   if (entry) {
     historyCache.set(msg.prompt_id, entry);
     queueState.entries.set(msg.prompt_id, entry);
     renderQueueRow(msg.prompt_id);
   }
+  if (!mine && !showAllWindows) return;
   const items = Logic.galleryItems({ [msg.prompt_id]: entry || { status: "completed", outputs: msg.outputs } });
   addGalleryItems(items);
+  // Another window's node ids mean nothing in this graph.
+  if (!mine) return;
   // F13: show each output node's newest image inside the node.
   for (const [nodeId, output] of Object.entries(msg.outputs || {})) {
     const node = graph.getNodeById(Number(nodeId));
@@ -1120,36 +1173,40 @@ function connectWebSocket() {
   };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
+    // Progress, previews and node marks of another window's prompt stay
+    // out of this window (its queue row still follows along).
+    const mine = !msg.prompt_id || isMine(msg.prompt_id);
     switch (msg.type) {
       case "queued":
         if (!queueState.entries.has(msg.prompt_id)) {
-          queueState.entries.set(msg.prompt_id, { status: "queued", queued_at: Date.now() / 1000 });
+          queueState.entries.set(msg.prompt_id, { status: "queued", queued_at: Date.now() / 1000, client_id: msg.client_id || null });
           queueState.pending.push(msg.prompt_id);
         }
         renderQueueRow(msg.prompt_id);
         break;
       case "execution_start":
         updateQueueEntry(msg.prompt_id, { status: "running", started_at: Date.now() / 1000, runningText: "" });
-        hideProgress();
+        if (mine) hideProgress();
         break;
       case "executing":
         updateQueueEntry(msg.prompt_id, { status: "running", runningText: `Running: ${msg.prompt_id} — ${msg.class_type}` });
+        if (!mine) break;
         setRunningNode(msg.node_id);
         livePreviews.clear();
         showNodeStart(msg);
         break;
       case "execution_cached":
-        if (msg.node_index) {
+        if (mine && msg.node_index) {
           progress.nodeIndex = msg.node_index;
           progress.nodeCount = msg.node_count;
           setProgressBar("progress-overall", Logic.overallProgress(progress.nodeIndex, progress.nodeCount, 1, 1));
         }
         break;
       case "progress":
-        showProgress(msg);
+        if (mine) showProgress(msg);
         break;
       case "preview":
-        showPreview(msg);
+        if (mine) showPreview(msg);
         break;
       case "execution_success":
         onExecutionSuccess(msg);
@@ -1159,10 +1216,11 @@ function connectWebSocket() {
         break;
       case "execution_interrupted":
         updateQueueEntry(msg.prompt_id, { status: "interrupted", finished_at: Date.now() / 1000 });
-        hideProgress();
+        if (mine) hideProgress();
         break;
       case "execution_error":
         updateQueueEntry(msg.prompt_id, { status: "error", error: msg.error, class_type: msg.class_type, finished_at: Date.now() / 1000 });
+        if (!mine) break;
         hideProgress();
         markNodeError(msg.node_id, msg.error);
         showToast(msg.class_type ? `${msg.class_type} failed: ${msg.error}` : `Run failed: ${msg.error}`, "error");
@@ -2203,6 +2261,9 @@ function initUI() {
   document.getElementById("btn-fit-view").onclick = fitView;
   document.getElementById("btn-help").onclick = () => openOverlay("help-overlay");
   document.getElementById("help-close").onclick = () => closeOverlay("help-overlay");
+  const allWindows = document.getElementById("queue-all-windows");
+  allWindows.checked = showAllWindows;
+  allWindows.onchange = () => setShowAllWindows(allWindows.checked);
   document.getElementById("btn-cancel-all").onclick = cancelAllPending;
   document.getElementById("btn-clear-finished").onclick = clearFinished;
 

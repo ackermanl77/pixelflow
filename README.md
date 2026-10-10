@@ -24,8 +24,10 @@ ComfyUI's own frontend uses) for wiring nodes together and running them.
   families), clip skip and karras/trailing schedules are supported, with
   live previews while sampling.
 - Only the nodes an output (Save/Preview Image) needs are run, and unchanged
-  nodes are reused from the previous run — re-queueing after a Blur tweak
-  doesn't re-sample a fixed-seed image.
+  nodes are reused from the previous run (also after a restart) —
+  re-queueing after a Blur tweak doesn't re-sample a fixed-seed image, and
+  an unchanged prompt isn't encoded again.
+- Each browser window shows its own runs; **All windows** shows everyone's.
 - The graph auto-saves in the browser; the queue, gallery and history
   survive reloads and restarts (`history.jsonl`). Logs go to
   `logs\pixelflow.log` (System panel → Open log folder).

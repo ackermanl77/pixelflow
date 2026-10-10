@@ -52,6 +52,7 @@ def isolated_data_dirs(tmp_path, monkeypatch):
         monkeypatch.setattr(paths, name, dirs[key])
     # The app-wide queue persists finished prompts; keep that out of the repo too.
     monkeypatch.setattr(main.queue, "history_path", tmp_path / "history.jsonl")
+    monkeypatch.setattr(paths, "OUTPUT_CACHE_DIR", tmp_path / "cache" / "outputs")
     return dirs
 
 

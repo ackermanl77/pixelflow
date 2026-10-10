@@ -237,3 +237,34 @@ test("X/Y plot: a 2x2 grid runs for real and its contact sheet opens", async ({ 
   const width = await page.evaluate(() => graph._nodes.find((n) => n.comfyClass === "EmptyImage").properties.width);
   expect(width).toBe(512);
 });
+
+test("per-window queue: another window's run stays out of this one until 'All windows'", async ({ page, context }) => {
+  // A second tab of the same browser: its own sessionStorage, so its own client id.
+  const other = await context.newPage();
+  await other.goto("/");
+  await expect(other.locator("#conn-status")).toHaveAttribute("data-state", "connected");
+  await other.evaluate(() => {
+    const empty = addNodeToGraph("EmptyImage", [60, 100]);
+    const save = addNodeToGraph("SaveImage", [420, 100]);
+    empty.connect(0, save, findInputSlot(save, "image"));
+  });
+  const ids = await Promise.all([page, other].map((p) => p.evaluate(() => CLIENT_ID)));
+  expect(ids[0]).not.toBe(ids[1]);
+  await other.click("#btn-queue");
+  await expect(other.locator("#gallery .gallery-item img").first()).toBeVisible({ timeout: 30_000 });
+  const ownRow = other.locator(".queue-entry:not([hidden])").first();
+  await expect(ownRow).toBeVisible();
+
+  // This window got the same messages, but shows neither the row nor the image.
+  const promptId = await other.evaluate(() => [...queueState.entries.keys()].pop());
+  await expect.poll(() => page.evaluate((id) => queueState.entries.get(id)?.status, promptId)).toBe("completed");
+  expect(await page.evaluate((id) => queueState.rows.get(id).hidden, promptId)).toBe(true);
+  expect(await page.evaluate((id) => galleryItems.some((item) => item.promptId === id), promptId)).toBe(false);
+
+  await page.check("#queue-all-windows");
+  expect(await page.evaluate((id) => queueState.rows.get(id).hidden, promptId)).toBe(false);
+  await expect(page.locator(".queue-entry.foreign").first()).toContainText("another window");
+  expect(await page.evaluate((id) => galleryItems.some((item) => item.promptId === id), promptId)).toBe(true);
+  await page.uncheck("#queue-all-windows");
+  await other.close();
+});

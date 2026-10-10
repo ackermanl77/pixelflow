@@ -415,6 +415,9 @@ button.danger:hover { background: #4a2222; }
 .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .panel-header h3 { margin-bottom: 8px; }
 .panel-actions { display: flex; gap: 4px; margin-bottom: 8px; }
+.queue-scope { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; white-space: nowrap; }
+.queue-entry.foreign { opacity: 0.75; }
+.queue-entry[hidden] { display: none; }
 .queue-entry .queue-detail { flex: none; color: var(--text-dim); font-size: 10px; }
 
 .gallery-group {

@@ -4,6 +4,7 @@ import random
 import threading
 import time
 import weakref
+from collections import OrderedDict
 
 from PIL import Image
 
@@ -313,20 +314,99 @@ def _repeat_rows(tensor, repeat: int):
     return tensor if repeat == 1 else tensor.repeat(repeat, *([1] * (tensor.dim() - 1)))
 
 
+# Encoded prompts, reused while the prompt, the model and its LoRAs stay the same: a re-run after
+# changing only the seed, steps or sampler skips the text encoders (T5-XXL takes a while, and much
+# longer when it's offloaded to the CPU). Keyed by the base pipeline (held weakly: an evicted model's
+# entries just stop matching) and cleared with the models by /api/free.
+EMBED_CACHE_SIZE = 16
+_embed_cache: "OrderedDict[tuple, tuple]" = OrderedDict()
+_embed_cache_lock = threading.Lock()
+
+
+def clear_prompt_cache() -> None:
+    with _embed_cache_lock:
+        _embed_cache.clear()
+
+
+def _cached_embeds(base_pipe, key: tuple, encode):
+    """encode() once per `key` for `base_pipe`; the result is a dict of tensors."""
+    full_key = (id(base_pipe),) + key
+    with _embed_cache_lock:
+        hit = _embed_cache.get(full_key)
+        if hit is not None and hit[0]() is base_pipe:
+            _embed_cache.move_to_end(full_key)
+            return hit[1]
+    embeds = encode()
+    if embeds is not None:
+        with _embed_cache_lock:
+            _embed_cache[full_key] = (weakref.ref(base_pipe), embeds)
+            while len(_embed_cache) > EMBED_CACHE_SIZE:
+                _embed_cache.popitem(last=False)
+    return embeds
+
+
+def _reference_embeds(pipe, family, text, negative_text):
+    """The pipeline's own encode_prompt() for a plain prompt -- exactly what pipe() would compute
+    from the text -- as call kwargs, or None when this pipeline has no encode_prompt we know how to
+    call (then the text goes to pipe() as before)."""
+    encode = getattr(pipe, "encode_prompt", None)
+    if encode is None:
+        return None
+    device = getattr(pipe, "_execution_device", None) or getattr(pipe, "device", None)
+    try:
+        if family == prompt_weights.FAMILY_SD:
+            pe, npe = encode(text, device, 1, True, negative_prompt=negative_text)
+            return {"prompt_embeds": pe, "negative_prompt_embeds": npe}
+        if family in (prompt_weights.FAMILY_SDXL, prompt_weights.FAMILY_SD3):
+            if family == prompt_weights.FAMILY_SDXL:
+                result = encode(text, None, device=device, num_images_per_prompt=1, do_classifier_free_guidance=True,
+                                negative_prompt=negative_text)
+            else:
+                result = encode(text, None, None, device=device, num_images_per_prompt=1,
+                                do_classifier_free_guidance=True, negative_prompt=negative_text)
+            pe, npe, pooled, npooled = result
+            return {"prompt_embeds": pe, "negative_prompt_embeds": npe, "pooled_prompt_embeds": pooled,
+                    "negative_pooled_prompt_embeds": npooled}
+        if family == prompt_weights.FAMILY_FLUX:
+            pe, pooled, _text_ids = encode(text, None, device=device, num_images_per_prompt=1)
+            return {"prompt_embeds": pe, "pooled_prompt_embeds": pooled}
+    except (TypeError, ValueError, AttributeError) as exc:  # another signature: keep the text path
+        logger.debug("%s.encode_prompt not usable for caching (%s)", type(pipe).__name__, exc)
+    return None
+
+
+def _lora_signature(model) -> tuple:
+    return tuple((str(name), float(strength)) for name, strength in (model or {}).get("loras", []) or ())
+
+
 def _prompt_kwargs(model, pipe, positive, negative, repeat: int):
-    """`prompt`/`negative_prompt` (plain text), or prompt embeddings
-    (`prompt_embeds`, plus `pooled_prompt_embeds` for SDXL/SD3/Flux, and
-    negatives) when weighting, long prompts or clip skip need our own
-    encoding (prompt_weights.py, report item B9)."""
+    """Prompt embeddings (`prompt_embeds`, plus `pooled_prompt_embeds` for SDXL/SD3/Flux, and
+    negatives): from our own encoder when weighting, long prompts or clip skip need it
+    (prompt_weights.py, report item B9), else from the pipeline's own encode_prompt() -- either way
+    cached between runs (_cached_embeds). Plain `prompt`/`negative_prompt` text only for a pipeline
+    we can't encode for. The model's LoRAs are applied first: a LoRA can change the text encoder."""
     text, negative_text = _texts(positive, negative)
     clip_skip = int(positive.get("clip_skip", 0) or 0)
     arch = (model or {}).get("arch") or models.pipeline_meta(model.get("pipeline") if model else None).get("arch")
     family = prompt_weights.encoding_family(pipe, arch)
+    base_pipe = (model or {}).get("pipeline", pipe)
+    if model:
+        apply_loras(base_pipe, model.get("loras", []))
+    key_base = (family, text, negative_text, clip_skip, _lora_signature(model))
     # clip_skip goes through our own encoder too: diffusers' SD 1.x clip_skip
     # path reaches for CLIPTextModel.text_model, which transformers 5 removed.
     if prompt_weights.needs_custom_encoding(pipe, family, [text, negative_text], clip_skip):
-        embeds = prompt_weights.encode_conditioning(pipe, family, text, negative_text, clip_skip)
+        embeds = _cached_embeds(
+            base_pipe, ("ours",) + key_base,
+            lambda: prompt_weights.encode_conditioning(pipe, family, text, negative_text, clip_skip),
+        )
         return {key: _repeat_rows(value, repeat) for key, value in embeds.items()}
+    if family is not None and not clip_skip:
+        embeds = _cached_embeds(
+            base_pipe, ("pipeline",) + key_base, lambda: _reference_embeds(pipe, family, text, negative_text)
+        )
+        if embeds is not None:
+            return {key: _repeat_rows(value, repeat) for key, value in embeds.items()}
     if family != prompt_weights.FAMILY_SD:
         # Plain text: either nothing of ours is needed (diffusers' own
         # encoding is the reference then), or the pipeline is one we have no
@@ -390,7 +470,7 @@ def _run_diffusion(
         if latents is not None and (now - last_preview[0] >= PREVIEW_INTERVAL_S or current == total_steps):
             last_preview[0] = now
             try:
-                image = latent_preview.latents_to_image(latents, arch)
+                image = latent_preview.latents_to_image(latents, arch, width, height)
             except Exception:  # noqa: BLE001 - a preview must never break sampling
                 image = None
             if image is not None:

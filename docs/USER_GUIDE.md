@@ -117,6 +117,14 @@ Shift-click) puts a run in front of everything already waiting.
   run at the next step (it never stops a different run that started in the
   meantime). **Cancel all** cancels everything that hasn't started;
   **Clear finished** removes finished rows (images stay on disk).
+- **Several windows.** Each browser tab or window shows only its own runs
+  (and their progress and images), though they all share one queue. Tick
+  **All windows** above the queue to see every window's runs too (marked
+  "another window"); **Cancel all** and **Clear finished** then act on all
+  of them.
+- Unchanged nodes are reused from the previous run, even after restarting
+  PixelFlow: re-queueing a fixed-seed graph after changing only a Blur
+  doesn't sample again. **Free memory** forgets them.
 
 If the graph has a problem (an unconnected required input, a wire between
 incompatible sockets, an out-of-range number, a colour that isn't one, an
@@ -347,7 +355,8 @@ the model, seed, sampler, steps, cfg and prompt, and offers:
 Click the GPU name in the top-right corner: PixelFlow's version, the device
 and its free memory, torch/diffusers/Python versions, where your data,
 models and logs are, and which models are loaded (on the GPU, in RAM, or
-offloaded). **Free memory** unloads all models; **Open log folder** opens the
+offloaded). **Free memory** unloads all models and forgets the reused node
+outputs and encoded prompts; **Open log folder** opens the
 folder with `pixelflow.log` (useful when reporting a problem).
 
 ## Where your files are
