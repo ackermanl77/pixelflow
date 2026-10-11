@@ -193,6 +193,13 @@ re-create any single image of a batch.
   ControlNet. Uses Depth Anything V2 Small (about 100 MB, downloaded from
   the Hugging Face Hub the first time, then cached), on the GPU when there
   is one; any transformers depth model id can be typed instead.
+- **Pose (OpenPose)** (image) — finds the people in the picture and draws
+  their body poses as coloured OpenPose skeletons on black, for an OpenPose
+  ControlNet (e.g. `lllyasviel/control_v11p_sd15_openpose`). Two models are
+  downloaded from the Hugging Face Hub the first time (a person detector and
+  ViTPose, about 250 MB together); `keypoint_threshold` leaves out joints the
+  model isn't sure of, `person_threshold` how sure it must be that something
+  is a person. Body only -- no hands or face points.
 - **Soft Edges** (image) — soft, HED-like contours for a SoftEdge/HED
   ControlNet; higher `detail` keeps finer edges.
 - **Lineart** (image) — thin white lines on black for a lineart ControlNet;

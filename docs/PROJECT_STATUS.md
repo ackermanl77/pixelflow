@@ -192,7 +192,11 @@ files directly.
   Canny Edges (on cv2's threshold scale), Depth Map (Depth Anything V2
   Small through transformers, downloaded on first use; 0.01 s per image warm
   on the RTX 5080), Soft Edges, Lineart (XDoG) and Scribble
-  (`backend/nodes/preprocessors.py`); Upscale Image (model) runs a spandrel model tiled
+  (`backend/nodes/preprocessors.py`), Pose (OpenPose) (`backend/nodes/pose.py`:
+  RT-DETR person boxes, ViTPose's 17 COCO keypoints per box, drawn as
+  OpenPose's 18-point body in controlnet_aux's colours; the ViTPose crop and
+  heatmap decoding are done with PIL/torch because transformers' processor
+  needs scipy -- within 3.7 px of transformers' own on a 409 px person); Upscale Image (model) runs a spandrel model tiled
 - **utility** (frontend only): Reroute, Primitive
 - **output**: Preview Image (to `temp/`), Save Image (`prefix_00001_.png`,
   subfolders, `%date%`/`%time%`/`%seed%`/`%model%`)
@@ -273,8 +277,10 @@ and the Playwright smoke test. `release.yml` calls `ci.yml` first.
 - **ControlNet is checked only with tiny test models** — a real SD 1.5/SDXL
   ControlNet checkpoint hasn't been run yet. The Depth Map preprocessor was
   run with the real Depth Anything V2 Small model; Soft Edges, Lineart and
-  Scribble are classical approximations of the learned annotators. No pose
-  (OpenPose) preprocessor.
+  Scribble are classical approximations of the learned annotators. Pose
+  (OpenPose) runs the real RT-DETR + ViTPose models (checked on a portrait;
+  opt-in test `PIXELFLOW_POSE_SMOKE=<photo>`) but draws the body only -- no
+  hand or face keypoints -- and hasn't driven a real OpenPose ControlNet yet.
 - **Frontend tests**: unit tests of `logic.js`, ESLint, and one Playwright
   smoke test (page load, node palette, adding and wiring nodes with the
   mouse, running a torch-free graph, saving and loading a workflow) against

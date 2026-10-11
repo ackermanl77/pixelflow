@@ -105,7 +105,8 @@ push or a real release at all, which just builds and uploads the artifact.
   as a MASK), Load Mask, Load ControlNet (`models/controlnet/` or a Hub id)
 - **ControlNet**: Apply ControlNet (strength and start/end; chainable; works
   with all three samplers); preprocessors: Canny Edges, Depth Map (Depth
-  Anything V2), Soft Edges, Lineart and Scribble
+  Anything V2), Pose (OpenPose skeletons from RT-DETR + ViTPose), Soft Edges,
+  Lineart and Scribble
 - **Upscaling**: Load Upscale Model + Upscale Image (model) -- ESRGAN-family
   models via spandrel, tiled on the GPU
 - **conditioning**: CLIP Text Encode (`(word:1.2)` weighting, long prompts,
