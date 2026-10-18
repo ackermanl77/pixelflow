@@ -115,7 +115,9 @@ push or a real release at all, which just builds and uploads the artifact.
   KSampler (Inpaint) — real diffusion sampling (GPU if available, else CPU),
   per-image seeds in a batch, normal/karras/trailing schedules
 - **image**: Empty Image, Resize, Blur, Brightness/Contrast, Hue/Saturation,
-  Blend, Text Overlay — real, CPU-only, Pillow-based operations
+  Blend, Text Overlay, Pad Image for Outpainting (extends the canvas and masks
+  the new area for KSampler (Inpaint); an "Outpaint" template sets it up) —
+  real, CPU-only, Pillow-based operations
 - **output**: Preview Image (throwaway, `temp\`), Save Image (numbered
   `prefix_00001_.png`, subfolders, `%date%`/`%time%`/`%seed%`/`%model%` tokens)
 - **utility**: Reroute and Primitive (drives any widget converted to an

@@ -2,6 +2,9 @@
 // reroute/primitive nodes and the mask editor. Same test-mode backend as smoke.spec.js.
 const { test, expect } = require("@playwright/test");
 
+// The page's own globals, used inside page.evaluate() callbacks (they run in the browser).
+/* global CLIENT_ID, queueState, galleryItems */
+
 test.beforeEach(async ({ page }) => {
   page.errors = [];
   page.on("pageerror", (err) => page.errors.push(err.message));

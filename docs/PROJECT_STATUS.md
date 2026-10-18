@@ -188,7 +188,11 @@ files directly.
   (Inpaint) — all with `sampler`, `scheduler` (normal/karras/trailing), `seed`,
   `steps`, `cfg`, `batch_size` and an optional `negative`
 - **image** (Pillow/NumPy): Empty Image, Resize, Blur, Brightness/Contrast,
-  Hue/Saturation, Blend, Text Overlay, and the ControlNet preprocessors
+  Hue/Saturation, Blend, Text Overlay, Pad Image for Outpainting (2026-10-18, B21: padding rounded up
+  to multiples of 8, the new area seeded with the image's edge pixels stretched outwards and blurred
+  rather than flat grey, and a MASK reaching `feathering` px into the original; the "Outpaint"
+  template wires it into KSampler (Inpaint); `tests/test_outpaint.py` runs that graph with the tiny
+  real pipeline), and the ControlNet preprocessors
   Canny Edges (on cv2's threshold scale), Depth Map (Depth Anything V2
   Small through transformers, downloaded on first use; 0.01 s per image warm
   on the RTX 5080), Soft Edges, Lineart (XDoG) and Scribble

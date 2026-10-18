@@ -1,0 +1,18 @@
+{
+  "nodes": [
+    {"id": "ckpt", "type": "LoadCheckpoint", "pos": [50, 120]},
+    {"id": "prompt", "type": "CLIPTextEncode", "pos": [320, 20], "values": {"text": "a wide landscape, continuing the scene"}},
+    {"id": "image", "type": "LoadImage", "pos": [320, 220]},
+    {"id": "pad", "type": "ImagePadForOutpaint", "pos": [320, 520], "values": {"left": 0, "top": 0, "right": 256, "bottom": 0, "feathering": 40}},
+    {"id": "sampler", "type": "KSamplerInpaint", "pos": [680, 160], "values": {"steps": 8, "cfg": 0, "denoise": 1.0}},
+    {"id": "save", "type": "SaveImage", "pos": [1000, 160]}
+  ],
+  "links": [
+    ["ckpt", 0, "sampler", "model"],
+    ["prompt", 0, "sampler", "positive"],
+    ["image", 0, "pad", "image"],
+    ["pad", 0, "sampler", "image"],
+    ["pad", 1, "sampler", "mask"],
+    ["sampler", 0, "save", "image"]
+  ]
+}

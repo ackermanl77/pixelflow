@@ -1,6 +1,6 @@
 from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
-from .base import NodeBase, map_image_pairs, map_images, register_node
+from .base import NodeBase, as_image_list, map_image_pairs, map_images, register_node
 
 
 @register_node("Resize Image")
@@ -248,3 +248,86 @@ def canny(image, low: int, high: int):
             break
         edges = updated
     return Image.fromarray((edges * 255).astype(np.uint8)).convert("RGB")
+
+
+@register_node("Pad Image for Outpainting")
+class ImagePadForOutpaint(NodeBase):
+    """Outpainting (B21): extends the canvas by `left`/`top`/`right`/`bottom` pixels (rounded up
+    to multiples of 8, so the latent size stays exact) and returns the padded image with a MASK of
+    the new area for KSampler (Inpaint). The new area starts as the image's own edge pixels
+    stretched outwards and blurred -- the sampler then continues the scene from colours that match,
+    instead of from flat grey -- and the mask reaches `feathering` pixels into the original, fading
+    out, so the seam is repainted softly."""
+
+    CATEGORY = "image"
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("image", "mask")
+    FUNCTION = "run"
+    DESCRIPTION = "Extends the canvas and masks the new area for KSampler (Inpaint)."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        side = ("INT", {"default": 0, "min": 0, "max": 2048, "step": 8})
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "left": side,
+                "top": side,
+                "right": ("INT", {"default": 256, "min": 0, "max": 2048, "step": 8}),
+                "bottom": side,
+                "feathering": ("INT", {"default": 40, "min": 0, "max": 512}),
+            }
+        }
+
+    @staticmethod
+    def _snap(value) -> int:
+        value = max(0, int(value))
+        return (value + 7) // 8 * 8
+
+    def run(self, image, left=0, top=0, right=256, bottom=0, feathering=40):
+        left, top, right, bottom = (self._snap(v) for v in (left, top, right, bottom))
+        images = as_image_list(image)
+        padded, masks = [], []
+        for img in images:
+            padded.append(self._pad(img.convert("RGB"), left, top, right, bottom))
+            masks.append(self._mask(img.size, left, top, right, bottom, int(feathering)))
+        if isinstance(image, (list, tuple)):
+            return (padded, masks)
+        return (padded[0], masks[0])
+
+    @staticmethod
+    def _pad(img: Image.Image, left: int, top: int, right: int, bottom: int) -> Image.Image:
+        import numpy as np
+
+        if not (left or top or right or bottom):
+            return img.copy()
+        array = np.asarray(img)
+        # Edge pixels stretched outwards (the classic "replicate" border), then a blur over the new
+        # area only, so the sampler starts from the scene's own colours without hard streaks.
+        extended = np.pad(array, ((top, bottom), (left, right), (0, 0)), mode="edge")
+        out = Image.fromarray(extended)
+        radius = max(4, max(left, top, right, bottom) // 8)
+        blurred = out.filter(ImageFilter.GaussianBlur(radius))
+        keep = Image.new("L", out.size, 0)
+        keep.paste(255, (left, top, left + img.width, top + img.height))
+        return Image.composite(out, blurred, keep)
+
+    @staticmethod
+    def _mask(size, left: int, top: int, right: int, bottom: int, feathering: int) -> Image.Image:
+        import numpy as np
+
+        width, height = size
+        total_w, total_h = width + left + right, height + top + bottom
+        mask = np.ones((total_h, total_w), np.float32)
+        # Distance inside the original image from each padded edge (only the edges that grew).
+        ys, xs = np.mgrid[0:height, 0:width].astype(np.float32)
+        distance = np.full((height, width), np.inf, np.float32)
+        for grew, dist in ((left, xs), (right, width - 1 - xs), (top, ys), (bottom, height - 1 - ys)):
+            if grew:
+                distance = np.minimum(distance, dist)
+        if feathering > 0:
+            inside = np.clip(1.0 - distance / float(feathering), 0.0, 1.0)
+        else:
+            inside = np.zeros((height, width), np.float32)
+        mask[top:top + height, left:left + width] = inside
+        return Image.fromarray(np.clip(mask * 255.0 + 0.5, 0, 255).astype(np.uint8))  # 2-D uint8: mode L

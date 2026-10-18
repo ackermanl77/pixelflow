@@ -16,6 +16,11 @@
       "description": "Repaint the white area of a mask on an uploaded image."
     },
     {
+      "file": "outpaint.json",
+      "title": "Outpaint",
+      "description": "Extend an uploaded image past its edges (set the padding on Pad Image for Outpainting)."
+    },
+    {
       "file": "hires_fix.json",
       "title": "Hires fix",
       "description": "Generate small, upscale, then re-sample at low denoise for detail."
