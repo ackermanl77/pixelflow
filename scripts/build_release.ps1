@@ -253,6 +253,14 @@ json.dump({
     if ($buildInfoStatus -ne 0) { throw "Writing build-info.json failed (exit code $LASTEXITCODE)." }
     Get-Content (Join-Path $ReleaseFolder "build-info.json") | Write-Host
 
+    # Post-build smoke test (backend/selftest.py): frontend + WebView2 runtime, torch/CUDA, the diffusers
+    # pipeline classes, and a real prompt through the embedded server in a throwaway data folder.
+    $selfTestReport = Join-Path ([System.IO.Path]::GetTempPath()) "PixelFlow-selftest.txt"
+    if (Test-Path $selfTestReport) { Remove-Item $selfTestReport -Force }
+    $selfTest = Start-Process -FilePath (Join-Path $ReleaseFolder "PixelFlow.exe") -ArgumentList "--self-test" -Wait -PassThru
+    if (Test-Path $selfTestReport) { Get-Content $selfTestReport | Write-Host }
+    if ($selfTest.ExitCode -ne 0) { throw "PixelFlow.exe --self-test failed (exit code $($selfTest.ExitCode)) -- see $selfTestReport." }
+
     if ($Sign) {
         $exe = Join-Path $ReleaseFolder "PixelFlow.exe"
         & $SignTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 $exe

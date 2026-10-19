@@ -238,7 +238,13 @@ def _shutdown(thread: threading.Thread | None, timeout_s: float = 10.0) -> None:
     thread.join(timeout_s)
 
 
-def main() -> None:
+def main() -> int | None:
+    from backend.selftest import run_self_test, wants_self_test
+
+    if wants_self_test(sys.argv[1:]):
+        # Frontend, WebView2 runtime, torch/CUDA, diffusers and a real prompt through the
+        # embedded server (throwaway data folder), then exit -- no window (backend/selftest.py).
+        return run_self_test(desktop=sys.modules[__name__])
     # Before anything else, so even an import failure of the backend in the
     # frozen app lands in logs/pixelflow.log (the build has no console).
     from backend.logging_setup import setup_logging
@@ -267,4 +273,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
