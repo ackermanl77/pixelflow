@@ -116,14 +116,17 @@ def _check_libraries(log: Callable[[str], None]) -> bool:
     import transformers
 
     missing = []
+    first_error = ""
     for module, names in ((diffusers, DIFFUSERS_CLASSES), (transformers, TRANSFORMERS_CLASSES)):
         for name in names:
             try:
                 getattr(module, name)
             except Exception:  # noqa: BLE001 - a lazy import that fails raises various errors
                 missing.append(f"{module.__name__}.{name}")
+                first_error = first_error or traceback.format_exc().strip()
     if missing:
         log(f"FAIL  classes that don't import: {', '.join(missing)}")
+        log(first_error)
         return False
     log(f"ok    diffusers {diffusers.__version__}, transformers {transformers.__version__}: pipeline classes import")
     return True

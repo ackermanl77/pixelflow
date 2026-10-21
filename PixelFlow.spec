@@ -17,6 +17,12 @@ if importlib.util.find_spec("peft") is not None:
 # spandrel (model upscalers) registers its architectures by importing them; collect them all.
 if importlib.util.find_spec("spandrel") is not None:
     packages.append("spandrel")
+# transformers' image utilities import torchvision whenever it's installed, and every diffusers
+# pipeline goes through them. Import analysis only picks up torchvision's .py files, not its
+# compiled operators (_C_stable.pyd, image_stable.pyd and their DLLs), so the frozen app failed
+# with "operator torchvision::nms does not exist" and no pipeline could load. Found by --self-test.
+if importlib.util.find_spec("torchvision") is not None:
+    packages.append("torchvision")
 for package in packages:
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas
