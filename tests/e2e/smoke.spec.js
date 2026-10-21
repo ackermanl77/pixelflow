@@ -76,6 +76,9 @@ test("load, palette, add + connect nodes, run, save and load a workflow", async 
   await expect(page.locator("#toast-area")).toContainText(`Saved workflow "${name}"`);
   const saved = await (await request.get(`/api/workflows/${name}`)).json();
   expect(saved.nodes).toHaveLength(2);
+  // F24: the runnable prompt rides along for the MCP server...
+  const savedPrompt = saved.extra.pixelflow_prompt;
+  expect(Object.values(savedPrompt).map((n) => n.class_type).sort()).toEqual(["EmptyImage", "SaveImage"]);
 
   await page.click("#btn-clear");
   await expect(page.locator("#empty-state")).toBeVisible();
@@ -84,6 +87,8 @@ test("load, palette, add + connect nodes, run, save and load a workflow", async 
   await row.getByRole("button", { name: "Load" }).click();
   await expect(page.locator("#workflow-overlay")).toBeHidden();
   expect(await page.evaluate(() => [graph._nodes.length, Object.keys(graph.links).length])).toEqual([2, 1]);
+  // ...but isn't kept in the loaded graph (it would go stale and mark it modified).
+  expect(await page.evaluate(() => "pixelflow_prompt" in (graph.extra || {}))).toBe(false);
 
   expect(errors).toEqual([]);
 });

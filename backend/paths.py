@@ -93,6 +93,7 @@ TEMP_DIR = ROOT_DIR / "temp"
 MODELS_DIR = resolve_models_dir(ROOT_DIR)
 CHECKPOINT_DIR = MODELS_DIR / "checkpoints"
 LORA_DIR = MODELS_DIR / "loras"
+EMBEDDING_DIR = MODELS_DIR / "embeddings"
 CONTROLNET_DIR = MODELS_DIR / "controlnet"
 UPSCALE_MODEL_DIR = MODELS_DIR / "upscale_models"
 # Finished prompts, one JSON object per line (see engine/queue.py).
@@ -101,12 +102,17 @@ HISTORY_PATH = ROOT_DIR / "history.jsonl"
 OUTPUT_CACHE_DIR = ROOT_DIR / "cache" / "outputs"
 # Rotating log files (see backend/logging_setup.py); created on first use.
 LOG_DIR = ROOT_DIR / "logs"
+# Prompt wildcards: __name__ picks a line of wildcards/name.txt (nodes/wildcards.py).
+WILDCARD_DIR = ROOT_DIR / "wildcards"
+# Custom node plugins, imported at startup (backend/plugins.py).
+CUSTOM_NODES_DIR = ROOT_DIR / "custom_nodes"
 
 
 def ensure_data_dirs() -> None:
     """Create the data folders. Failures are logged, not raised: a
     read-only location must not stop the server from starting."""
-    for folder in (OUTPUT_DIR, UPLOAD_DIR, WORKFLOW_DIR, TEMP_DIR, CHECKPOINT_DIR, LORA_DIR, CONTROLNET_DIR, UPSCALE_MODEL_DIR):
+    for folder in (OUTPUT_DIR, UPLOAD_DIR, WORKFLOW_DIR, TEMP_DIR, CHECKPOINT_DIR, LORA_DIR, EMBEDDING_DIR, CONTROLNET_DIR,
+                   UPSCALE_MODEL_DIR, WILDCARD_DIR, CUSTOM_NODES_DIR):
         try:
             folder.mkdir(parents=True, exist_ok=True)
         except OSError:

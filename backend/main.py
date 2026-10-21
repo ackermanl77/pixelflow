@@ -18,7 +18,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import contact_sheet, paths
+from . import contact_sheet, model_downloads, paths, plugins
 from .config import APP_ID, app_version, test_mode
 from .engine.graph import PromptValidationError, validate_prompt
 from .engine.queue import ConnectionManager, ExecutionQueue
@@ -75,6 +75,16 @@ def clear_temp_dir(folder: Optional[Path] = None) -> int:
     return removed
 
 
+def load_plugins() -> None:
+    """F22: arbitrary code from the user's custom_nodes folder, imported at
+    startup before the first /api/nodes (a broken plugin is logged, never
+    fatal). Off with PIXELFLOW_DISABLE_CUSTOM_NODES=1 or settings.json."""
+    if plugins.custom_nodes_enabled():
+        plugins.load_custom_nodes()
+    else:
+        logger.info("custom node plugins disabled")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     log_file = setup_logging()
@@ -83,6 +93,7 @@ async def lifespan(_app: FastAPI):
     logger.info("PixelFlow %s, data folder %s, models folder %s", app_version(), paths.ROOT_DIR, paths.MODELS_DIR)
     paths.ensure_data_dirs()
     clear_temp_dir()
+    load_plugins()
     restored = queue.load_history()
     if restored:
         logger.info("restored %d history entries from %s", restored, queue.history_path)
@@ -162,6 +173,8 @@ def _node_info() -> dict:
             "return_types": list(cls.RETURN_TYPES),
             "return_names": list(cls.RETURN_NAMES),
             "output_node": bool(getattr(cls, "OUTPUT_NODE", False)),
+            # The custom_nodes plugin that registered it (F22), or None for a built-in node.
+            "plugin": getattr(cls, "PLUGIN", None),
         }
     return info
 
@@ -434,6 +447,33 @@ def make_contact_sheet(request: ContactSheetRequest):
 # ---- models and system ----
 
 
+class DownloadRequest(BaseModel):
+    url: str = Field(..., max_length=2000)
+    kind: str = "auto"
+
+
+@app.post("/api/downloads")
+def start_download(request: DownloadRequest):
+    """F23: download a model from a Hugging Face file link or a Civitai model
+    page into models/<kind>/ ("auto" picks the folder), SHA-256 checked, in
+    the background. Returns the job; GET /api/downloads reports progress."""
+    if request.kind != "auto" and request.kind not in model_downloads.MODEL_FOLDERS:
+        raise HTTPException(400, f"Unknown model folder '{request.kind}'")
+    return model_downloads.MANAGER.start(request.url, request.kind)
+
+
+@app.get("/api/downloads")
+def list_downloads():
+    return model_downloads.MANAGER.list()
+
+
+@app.delete("/api/downloads/{job_id}")
+def cancel_download(job_id: str):
+    if not model_downloads.MANAGER.cancel(job_id):
+        raise HTTPException(404, "No running download with that id")
+    return {"cancelled": job_id}
+
+
 @app.get("/api/models/{kind}")
 def get_models(kind: str):
     """Installed models of a kind: checkpoints (files and diffusers folders
@@ -462,6 +502,7 @@ def _system_info() -> Dict[str, Any]:
             "data_dir": str(paths.ROOT_DIR),
             "models_dir": str(paths.MODELS_DIR),
             "log_dir": str(paths.LOG_DIR),
+            "custom_nodes": plugins.describe(),
             "test_mode": True,
         }
     t = runtime.torch()
@@ -479,6 +520,7 @@ def _system_info() -> Dict[str, Any]:
         "data_dir": str(paths.ROOT_DIR),
         "models_dir": str(paths.MODELS_DIR),
         "log_dir": str(paths.LOG_DIR),
+        "custom_nodes": plugins.describe(),
     }
     try:
         import diffusers

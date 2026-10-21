@@ -169,6 +169,27 @@ files directly.
   with `npm test` / `node --test tests/js` (also run from pytest when Node
   is installed); `npm run lint` (ESLint) and `npm run e2e` (Playwright smoke
   test against `PIXELFLOW_TEST_MODE=1`) — see `docs/BUILD.md`.
+- **`backend/nodes/wildcards.py`** (F21) — `{a|b}` and `__file__` wildcards
+  (`wildcards/` in the data folder), resolved per image seed by the samplers:
+  with wildcards a batch runs one image at a time (`_wildcard_runs()`), each
+  with `seed + i` and its own text, progress reported as one bar.
+  CLIP Text Encode's `IS_CHANGED` covers the wildcard files it names.
+- **`backend/nodes/embeddings.py`** (B22) — `embedding:name` loads
+  `models/embeddings/name.*` into the shared tokenizer/text encoder (both for
+  SDXL) as the token `<name>`, once per checkpoint; multi-vector embeddings
+  are expanded for PixelFlow's own encoder (diffusers' encode_prompt() does
+  it itself on the other path).
+- **`backend/plugins.py`** (F22) — custom node plugins from `custom_nodes/`,
+  imported at startup by `main.load_plugins()`.
+- **`backend/mcp_server.py`** (F24) — an MCP server on stdio
+  (`python -m backend.mcp_server`, `PixelFlow.exe --mcp`), standard library
+  only, driving the running app over HTTP; Save Workflow stores the API
+  prompt as `extra.pixelflow_prompt` for it (stripped again on load).
+  `desktop.py` writes `server.json` (port, pid) so it finds a fallback port.
+- **`backend/model_downloads.py`** (F23) — Hugging Face file / Civitai model
+  links resolved to one file, its folder and its published SHA-256,
+  downloaded as `<name>.part` and renamed only when verified; background jobs
+  behind `POST|GET /api/downloads` and `DELETE /api/downloads/{id}`.
 - **`frontend/vendor/`** — litegraph.js and its CSS, vendored locally.
 - **`desktop.py`** — see Entry points.
 
@@ -242,8 +263,8 @@ Run on 2026-10-07 in the dev `.venv` (Python 3.14, CUDA torch, RTX 5080):
 
 | Command | Result |
 |---|---|
-| `.\.venv\Scripts\python.exe -m pytest -q` | 384 passed, 1 skipped (the opt-in `PIXELFLOW_GPU_SMOKE` sd-turbo test) — 2026-10-09 |
-| `npm test` | 26/26 node:test unit tests pass |
+| `.\.venv\Scripts\python.exe -m pytest -q` | 457 passed, 2 skipped (the opt-in GPU tests) — 2026-10-20 |
+| `npm test` | 29/29 node:test unit tests pass — 2026-10-20 |
 | `npm run lint` | ESLint clean |
 | `npm run e2e` | 8 Playwright tests pass (the smoke test plus templates, groups, side panels, reroute/primitive, mask editor, a real 2×2 X/Y plot and two windows' queues) |
 

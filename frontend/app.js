@@ -1434,7 +1434,7 @@ async function replaceGraph(data, question = "Replace the current graph?") {
   }
   try {
     suppressHistory = true;
-    graph.configure(data);
+    graph.configure(Logic.withoutSavedPrompt(data));
   } catch (err) {
     showToast(`That workflow could not be loaded: ${err.message}`, "error");
     return false;
@@ -1460,7 +1460,8 @@ async function fetchWorkflows() {
 async function saveWorkflow(nameHint) {
   const name = nameHint || (await promptModal("Save Workflow As", currentWorkflowName));
   if (!name) return false;
-  const body = JSON.stringify(graph.serialize());
+  // F24: with the runnable prompt, for the MCP server.
+  const body = JSON.stringify(Logic.withSavedPrompt(graph.serialize(), buildPrompt()));
   const post = (overwrite) =>
     fetch(`/api/workflows/${encodeURIComponent(name)}?overwrite=${overwrite}`, {
       method: "POST",
@@ -2086,6 +2087,7 @@ async function openSystemPanel() {
     ["Data folder", info.data_dir],
     ["Models folder", info.models_dir],
     ["Logs", info.log_dir],
+    ["Custom nodes", Logic.describeCustomNodes(info.custom_nodes)],
   ];
   for (const [key, value] of rows) {
     const dt = document.createElement("dt");
@@ -2106,6 +2108,58 @@ async function openSystemPanel() {
     li.textContent = "None loaded";
     list.appendChild(li);
   }
+  refreshDownloads();
+}
+
+// ---- Model downloads (F23) ----
+
+let downloadPoll = null;
+
+async function refreshDownloads() {
+  clearTimeout(downloadPoll);
+  let jobs = [];
+  try {
+    const res = await fetch("/api/downloads");
+    if (res.ok) jobs = await res.json();
+  } catch (_) {
+    return;
+  }
+  const list = document.getElementById("download-list");
+  list.replaceChildren();
+  for (const job of jobs.slice().reverse()) {
+    const li = document.createElement("li");
+    li.className = "download-list-item";
+    li.textContent = Logic.describeDownload(job);
+    if (job.status === "resolving" || job.status === "downloading") {
+      const cancel = document.createElement("button");
+      cancel.textContent = "Cancel";
+      cancel.onclick = async () => {
+        await fetch(`/api/downloads/${encodeURIComponent(job.id)}`, { method: "DELETE" });
+        refreshDownloads();
+      };
+      li.append(cancel);
+    }
+    list.append(li);
+  }
+  const active = jobs.some((job) => job.status === "resolving" || job.status === "downloading");
+  const open = !document.getElementById("system-overlay").classList.contains("hidden");
+  if (active && open) downloadPoll = setTimeout(refreshDownloads, 1000);
+}
+
+async function startDownload(e) {
+  e.preventDefault();
+  const url = document.getElementById("download-url");
+  const res = await fetch("/api/downloads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: url.value.trim(), kind: document.getElementById("download-kind").value }),
+  });
+  if (!res.ok) {
+    showToast(`Download not started: ${(await errorFromResponse(res)).message}`, "error");
+    return;
+  }
+  url.value = "";
+  refreshDownloads();
 }
 
 // ---- Wiring up UI ----
@@ -2302,6 +2356,7 @@ function initUI() {
   // System
   document.getElementById("system-status").onclick = openSystemPanel;
   document.getElementById("system-close").onclick = () => closeOverlay("system-overlay");
+  document.getElementById("download-form").onsubmit = startDownload;
   document.getElementById("btn-free-memory").onclick = async () => {
     const res = await fetch("/api/free", { method: "POST" });
     if (res.ok) showToast(`Unloaded ${(await res.json()).unloaded} model(s).`);

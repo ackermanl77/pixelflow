@@ -34,6 +34,34 @@ from . import io_nodes, image_ops, generation, my_new_module  # noqa: F401
 That's it — restart the server and "Invert Colors" appears under **image**
 in the sidebar.
 
+## Custom node plugins (outside the source tree)
+
+The same class works as a plugin: save it as a `.py` file (or a folder with
+an `__init__.py`, which may use relative imports for its own helpers) in the
+data folder's `custom_nodes/` and restart PixelFlow (`backend/plugins.py`).
+Import the API from the package rather than relatively:
+
+```python
+from backend.nodes import NodeBase, register_node
+from backend.nodes.base import as_image_list, map_images  # IMAGE helpers
+```
+
+- Plugins load at startup, after the built-in nodes, in name order; files
+  and folders starting with `_` or `.` are skipped.
+- A plugin's nodes carry `"plugin": "<file or folder name>"` in `/api/nodes`;
+  `/api/system`'s `custom_nodes` lists every plugin with its nodes or its
+  error, which the System panel shows.
+- A plugin that raises while importing is logged and reported, never fatal.
+  A class name that already exists (a built-in node, or another plugin's) is
+  refused and the existing node restored, so a plugin can't change what a
+  saved workflow does.
+- **Plugins are arbitrary code**: they run with the user's permissions and
+  can do anything Python can. The packaged app only bundles its own
+  dependencies (torch, diffusers, PIL, numpy, ...), so a plugin can't
+  `pip install` more.
+- The output cache keys on node signatures, not on code: after editing a
+  plugin, use **Free memory** so a stale output isn't reused.
+
 ## The contract
 
 - **`CATEGORY`** — groups the node in the sidebar (`loaders`, `image`,

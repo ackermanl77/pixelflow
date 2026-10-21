@@ -160,3 +160,42 @@ test("a window shows its own prompts, window-less ones, or all of them", () => {
   assert.deepEqual(Object.keys(L.visibleHistory(history, "a", true)), ["p1", "p2", "p3"]);
   assert.deepEqual(L.visibleHistory(null, "a", false), {});
 });
+
+test("the System panel describes custom node plugins (F22)", () => {
+  assert.equal(L.describeCustomNodes([]), "none (data folder's custom_nodes)");
+  assert.equal(L.describeCustomNodes(undefined), "none (data folder's custom_nodes)");
+  assert.equal(
+    L.describeCustomNodes([
+      { name: "tools", nodes: ["A", "B"], error: null },
+      { name: "one", nodes: ["C"], error: null },
+      { name: "broken", nodes: [], error: "Traceback ..." },
+    ]),
+    "tools: 2 nodes; one: 1 node; broken: failed, see the log",
+  );
+});
+
+test("a saved workflow carries its API prompt, stripped again on load (F24)", () => {
+  const serialized = { nodes: [], links: [], extra: { ds: { scale: 1 } } };
+  const prompt = { 3: { class_type: "SaveImage", inputs: {} } };
+  const saved = L.withSavedPrompt(serialized, prompt);
+  assert.deepEqual(saved.extra, { ds: { scale: 1 }, pixelflow_prompt: prompt });
+  assert.deepEqual(serialized.extra, { ds: { scale: 1 } }, "the live graph's data is not modified");
+  assert.deepEqual(L.withoutSavedPrompt(saved), serialized);
+  assert.deepEqual(L.withSavedPrompt({ nodes: [] }, {}).extra, { pixelflow_prompt: {} });
+  const old = { nodes: [], extra: { ds: {} } };
+  assert.equal(L.withoutSavedPrompt(old), old);
+});
+
+test("download list lines (F23)", () => {
+  const base = { url: "https://civitai.com/models/1", filename: "style.safetensors", folder: "loras" };
+  assert.equal(L.describeDownload({ ...base, filename: null, folder: null, status: "resolving" }),
+    "https://civitai.com/models/1: finding the file…");
+  assert.equal(L.describeDownload({ ...base, status: "downloading", bytes: 512 * 1024 * 1024, total: 2048 * 1024 * 1024 }),
+    "style.safetensors → loras: 25% (512 MB / 2.0 GB)");
+  assert.equal(L.describeDownload({ ...base, status: "downloading", bytes: 1024, total: null }),
+    "style.safetensors → loras: (1.0 KB)");
+  assert.equal(L.describeDownload({ ...base, status: "done", verified: true }),
+    "style.safetensors → loras: done, SHA-256 verified");
+  assert.equal(L.describeDownload({ ...base, status: "error", error: "SHA-256 doesn't match" }),
+    "style.safetensors: failed — SHA-256 doesn't match");
+});

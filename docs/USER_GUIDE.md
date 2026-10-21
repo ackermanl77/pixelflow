@@ -231,6 +231,22 @@ re-create any single image of a batch.
   A prompt without weights that fits in 75 tokens is passed to the model
   exactly as before.
 
+  **Wildcards** vary a prompt: `a {red|green|blue} car` picks one of the
+  alternatives, and `__animal__` picks one line of `wildcards\animal.txt` in
+  your data folder (one option per line, `#` for comments; subfolders as
+  `__colors/warm__`). Alternatives can nest (`{a|{b|c}}`) or be empty
+  (`{very |}`), and a wildcard file's lines can contain more wildcards. They're
+  chosen from each image's seed, so a batch of 4 gives 4 different prompts, and
+  any one image re-runs to the same prompt from its saved seed. A `{word}`
+  without `|` is left as typed.
+
+  **Embeddings** (textual inversion): put `.safetensors`/`.pt`/`.bin` files in
+  `models\embeddings\` and write `embedding:name` in a prompt (the extension is
+  optional; subfolders as `embedding:styles/name`), e.g. a negative prompt of
+  `embedding:bad_hands`. SD 1.x/2.x and SDXL only (an SDXL embedding has
+  `clip_l` and `clip_g` parts); using an SD 1.5 embedding with an SDXL model,
+  or the other way round, stops with a clear error.
+
 ### sampling
 
 - **KSampler** — takes a `MODEL`, `CONDITIONING`, and an `IMAGE` that only
@@ -366,6 +382,51 @@ offloaded). **Free memory** unloads all models and forgets the reused node
 outputs and encoded prompts; **Open log folder** opens the
 folder with `pixelflow.log` (useful when reporting a problem).
 
+**Download a model**: paste a Hugging Face *file* link (open the model's
+"Files" tab and the file, e.g. `https://huggingface.co/<owner>/<repo>/blob/main/model.safetensors`)
+or a Civitai model page (`https://civitai.com/models/…`, the newest version
+unless the link has `?modelVersionId=`) and press **Download**. The folder is
+picked automatically (Civitai says what kind of model it is; for Hugging Face
+it's guessed from the name) or chosen from the list. The file is checked
+against the SHA-256 the site publishes and only then appears in `models\`;
+a cancelled, failed or mismatching download leaves nothing behind, and an
+existing file is never overwritten. Reload the page to see it in the model
+lists. Gated Hugging Face models use the token `huggingface-cli login` saved
+(or `HF_TOKEN`); Civitai models that need an account use `{"civitai_token":
+"…"}` in `settings.json` (or `CIVITAI_TOKEN`).
+
+The **Custom nodes** line lists the plugins loaded from the data folder's
+`custom_nodes\` (see "Custom nodes" below).
+
+## Custom nodes
+
+Python files (or folders with an `__init__.py`) in the data folder's
+`custom_nodes\` are loaded when PixelFlow starts, and the nodes they add show
+up in the palette (how to write one: docs/NODE_AUTHORING.md). **A plugin is
+ordinary Python code that runs with your permissions: only add files you
+trust**, exactly as with ComfyUI's custom nodes. A plugin that fails to load
+is reported in the System panel and the log without stopping PixelFlow, and
+one that would replace a built-in node is refused. Turn plugins off with
+`{"custom_nodes": false}` in `settings.json` or `PIXELFLOW_DISABLE_CUSTOM_NODES=1`.
+
+## Using PixelFlow from an AI assistant (MCP)
+
+PixelFlow can be an MCP server, so an assistant such as Claude can run your
+saved workflows: "run my *Portrait* workflow with the prompt 'an astronaut
+reading', seed 7". Add it to the assistant's MCP settings as a local (stdio)
+server whose command is `PixelFlow.exe --mcp` (from source:
+`python -m backend.mcp_server` in the project folder), and keep PixelFlow
+open -- the MCP server drives the running app over its local connection and
+has no network port of its own.
+
+The assistant gets four tools: `list_workflows`, `run_workflow` (a saved
+workflow, optionally with changed values such as `"CLIPTextEncode.text"` or
+`"KSampler.seed"`, waiting for the images and returning their file paths),
+`queue_status` and `get_outputs`. A workflow runs exactly as the Queue button
+would run it; one saved by an older PixelFlow needs to be opened and saved
+once first. PixelFlow looks for the app at `PIXELFLOW_URL`, then at the port
+the running app noted in `server.json` in the data folder, then at 8288.
+
 ## Where your files are
 
 - Running from source: next to the project (`outputs\`, `uploads\`,
@@ -373,6 +434,8 @@ folder with `pixelflow.log` (useful when reporting a problem).
 - The packaged app: `%LOCALAPPDATA%\PixelFlow` — unless a `portable.txt`
   file sits next to `PixelFlow.exe` (then next to the exe), or an older
   PixelFlow already kept its data there.
+- `wildcards\` (prompt wildcard files) and `custom_nodes\` (plugins) are in
+  the data folder too; `models\embeddings\` holds textual-inversion embeddings.
 - `PIXELFLOW_HOME` overrides the data folder; `PIXELFLOW_MODELS_DIR` (or
   `{"models_dir": "D:/sd-models"}` in `settings.json` in the data folder)
   keeps big models somewhere else, e.g. on a drive OneDrive doesn't sync.

@@ -440,6 +440,16 @@ button.danger:hover { background: #4a2222; }
 .system-info dt { color: var(--text-dim); }
 .system-info dd { margin: 0; overflow-wrap: anywhere; }
 .system-models { margin: 0; padding-left: 18px; }
+.download-form { display: flex; gap: 8px; align-items: center; }
+.download-form input { flex: 1; }
+.download-form select {
+  background: #191a1f;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px;
+}
+.download-list-item button { margin-left: 8px; }
 .shortcuts { border-collapse: collapse; width: 100%; }
 .shortcuts td { padding: 4px 6px; border-bottom: 1px solid var(--border); }
 kbd { background: #2a2b33; border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; font-size: 11px; }

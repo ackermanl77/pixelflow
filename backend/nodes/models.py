@@ -41,9 +41,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_CHECKPOINT = "stabilityai/sd-turbo"
 CHECKPOINT_EXTENSIONS = (".safetensors", ".ckpt")
 LORA_EXTENSIONS = (".safetensors",)
+# Textual-inversion embeddings (B22), used in prompts as embedding:name (nodes/embeddings.py).
+EMBEDDING_EXTENSIONS = (".safetensors", ".pt", ".bin")
 MODEL_KINDS = {
     "checkpoints": CHECKPOINT_EXTENSIONS,
     "loras": LORA_EXTENSIONS,
+    "embeddings": EMBEDDING_EXTENSIONS,
 }
 
 DTYPE_CHOICES = ["auto", "fp16", "bf16", "fp32"]
@@ -80,7 +83,7 @@ def _checkpoint_dir() -> Path:
 
 
 def _model_dir(kind: str) -> Path:
-    return {"checkpoints": paths.CHECKPOINT_DIR, "loras": paths.LORA_DIR}[kind]
+    return {"checkpoints": paths.CHECKPOINT_DIR, "loras": paths.LORA_DIR, "embeddings": paths.EMBEDDING_DIR}[kind]
 
 
 def list_local_models(folder: Path, extensions: Iterable[str], diffusers_dirs: bool) -> List[str]:

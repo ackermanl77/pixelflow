@@ -8,7 +8,7 @@ from collections import OrderedDict
 
 from PIL import Image
 
-from . import controlnet, latent_preview, models, prompt_weights, runtime
+from . import controlnet, embeddings, latent_preview, models, prompt_weights, runtime, wildcards
 from .base import NodeBase, as_image_list, first_image, register_node
 from .io_nodes import MODEL_INFO_KEY, NODE_INFO_KEY, SEED_INFO_KEY
 
@@ -54,13 +54,18 @@ class CLIPTextEncode(NodeBase):
     applies to the CLIP encoders of SD 1.x/2.x, SDXL and SD3 (Flux has
     none). The encoding itself happens in the sampler, where the model is
     known (backend/nodes/prompt_weights.py). Wire a second instance into the
-    sampler's `negative` input for a negative prompt (Flux ignores it)."""
+    sampler's `negative` input for a negative prompt (Flux ignores it).
+
+    Wildcards: `{red|green|blue}` picks one alternative and `__animal__` one
+    line of wildcards/animal.txt in the data folder, chosen per image seed, so
+    a batch varies and each image reproduces from its own seed."""
 
     CATEGORY = "conditioning"
     RETURN_TYPES = ("CONDITIONING",)
     RETURN_NAMES = ("conditioning",)
     FUNCTION = "encode"
-    DESCRIPTION = "Prompt text; supports (word:1.2) weighting and long prompts."
+    DESCRIPTION = ("Prompt text; supports (word:1.2) weighting, long prompts and wildcards "
+                   "({a|b|c}, __file__ from the wildcards folder), resolved per seed.")
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -79,7 +84,22 @@ class CLIPTextEncode(NodeBase):
             },
         }
 
+    @classmethod
+    def IS_CHANGED(cls, text="", **_):
+        """F21: the wildcard files the text names, so editing one re-runs the
+        sampler instead of reusing its cached output."""
+        stamps = []
+        for name in wildcards.referenced_files(text):
+            try:
+                stat = wildcards.wildcard_file(name).stat()
+                stamps.append((name, stat.st_mtime_ns, stat.st_size))
+            except (OSError, ValueError):
+                stamps.append((name, None, None))
+        return stamps
+
     def encode(self, text, clip_skip=0):
+        # Wildcards ({a|b}, __name__) stay in the text: the sampler resolves
+        # them per image seed (nodes/wildcards.py, report item F21).
         return ({"text": text, "clip_skip": int(clip_skip)},)
 
 
@@ -309,6 +329,45 @@ def _texts(positive, negative):
     return positive.get("text", ""), (negative.get("text", "") if negative else None)
 
 
+def _wildcard_runs(positive, negative, seed, count):
+    """F21: when either prompt has wildcards, one (seed, positive, negative)
+    per output image -- image i resolved with seed + i, exactly what a re-run
+    of that image alone (Save Image embeds its seed, batch_size 1) resolves --
+    plus the base seed; None when there are no wildcards (one batched call)."""
+    text, negative_text = _texts(positive, negative)
+    if not wildcards.has_wildcards(text) and not wildcards.has_wildcards(negative_text):
+        return None
+    seed = int(seed)
+    if seed < 0:
+        seed = random.randint(0, MAX_SEED)
+    runs = []
+    for i in range(int(count)):
+        image_seed = (seed + i) % (MAX_SEED + 1)
+        image_positive = dict(positive, text=wildcards.resolve(text, image_seed))
+        image_negative = (dict(negative, text=wildcards.resolve(negative_text, image_seed, "negative"))
+                          if negative else None)
+        runs.append((image_seed, image_positive, image_negative))
+    return seed, runs
+
+
+def _run_progress(on_progress, index, count):
+    """Progress of run `index` of `count` single-image runs as one bar."""
+    if on_progress is None:
+        return None
+
+    def report(current, total, **info):
+        on_progress(index * total + current, count * total, **info)
+
+    report.wants_previews = getattr(on_progress, "wants_previews", False)
+    return report
+
+
+def _merge_runs(seed, outputs):
+    images = [image for output in outputs for image in output["result"][0]]
+    seeds = [s for output in outputs for s in output["seeds"]]
+    return {"seed": seed, "seeds": seeds, "result": (images,)}
+
+
 def _repeat_rows(tensor, repeat: int):
     """Repeat a [1, ...] embedding `repeat` times along the batch dimension."""
     return tensor if repeat == 1 else tensor.repeat(repeat, *([1] * (tensor.dim() - 1)))
@@ -392,13 +451,18 @@ def _prompt_kwargs(model, pipe, positive, negative, repeat: int):
     base_pipe = (model or {}).get("pipeline", pipe)
     if model:
         apply_loras(base_pipe, model.get("loras", []))
+    # B22: embedding:name -> its token, loaded into the shared tokenizer/text encoder on first use.
+    text = embeddings.prepare(pipe, family, text)
+    negative_text = embeddings.prepare(pipe, family, negative_text)
     key_base = (family, text, negative_text, clip_skip, _lora_signature(model))
     # clip_skip goes through our own encoder too: diffusers' SD 1.x clip_skip
     # path reaches for CLIPTextModel.text_model, which transformers 5 removed.
-    if prompt_weights.needs_custom_encoding(pipe, family, [text, negative_text], clip_skip):
+    # Multi-vector embeddings count with all their vectors toward the 75-token window.
+    expanded = [embeddings.expand_vectors(pipe, text), embeddings.expand_vectors(pipe, negative_text)]
+    if prompt_weights.needs_custom_encoding(pipe, family, expanded, clip_skip):
         embeds = _cached_embeds(
             base_pipe, ("ours",) + key_base,
-            lambda: prompt_weights.encode_conditioning(pipe, family, text, negative_text, clip_skip),
+            lambda: prompt_weights.encode_conditioning(pipe, family, expanded[0], expanded[1], clip_skip),
         )
         return {key: _repeat_rows(value, repeat) for key, value in embeds.items()}
     if family is not None and not clip_skip:
@@ -591,6 +655,14 @@ class KSampler(NodeBase):
         unique_id=None,
         on_progress=None,
     ):
+        runs = _wildcard_runs(positive, negative, seed, batch_size)
+        if runs:
+            base_seed, items = runs
+            return _merge_runs(base_seed, [
+                self.sample(model, item_positive, latent_image, sampler, item_seed, steps, cfg, 1, item_negative,
+                            scheduler, unique_id, _run_progress(on_progress, index, len(items)))
+                for index, (item_seed, item_positive, item_negative) in enumerate(items)
+            ])
         pipe = model["pipeline"]
         # latent_image may be a batch (e.g. another KSampler's output); only
         # its size matters here.
@@ -676,6 +748,16 @@ class KSamplerImage(NodeBase):
         unique_id=None,
         on_progress=None,
     ):
+        sources = as_image_list(image)
+        runs = _wildcard_runs(positive, negative, seed, len(sources) * int(batch_size))
+        if runs:
+            base_seed, items = runs
+            return _merge_runs(base_seed, [
+                self.sample(model, item_positive, [sources[index // int(batch_size)]], denoise, sampler, item_seed,
+                            steps, cfg, 1, item_negative, scheduler, unique_id,
+                            _run_progress(on_progress, index, len(items)))
+                for index, (item_seed, item_positive, item_negative) in enumerate(items)
+            ])
         effective_steps = _denoise_steps(steps, denoise)
         controls = controlnet.controls_of(positive)
         if controls:
@@ -757,6 +839,18 @@ class KSamplerInpaint(NodeBase):
         unique_id=None,
         on_progress=None,
     ):
+        sources = as_image_list(image)
+        runs = _wildcard_runs(positive, negative, seed, len(sources) * int(batch_size))
+        if runs:
+            base_seed, items = runs
+            source_masks = as_image_list(mask)
+            return _merge_runs(base_seed, [
+                self.sample(model, item_positive, [sources[index // int(batch_size)]],
+                            [source_masks[0 if len(source_masks) == 1 else index // int(batch_size)]],
+                            denoise, sampler, item_seed, steps, cfg, 1, item_negative, scheduler, unique_id,
+                            _run_progress(on_progress, index, len(items)))
+                for index, (item_seed, item_positive, item_negative) in enumerate(items)
+            ])
         effective_steps = _denoise_steps(steps, denoise)
         controls = controlnet.controls_of(positive)
         if controls:

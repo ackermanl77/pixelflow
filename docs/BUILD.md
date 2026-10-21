@@ -219,6 +219,18 @@ between runs:
   folder with `portable.txt` or an existing `outputs` folder there, and
   `PIXELFLOW_HOME`/`PIXELFLOW_MODELS_DIR` take precedence.
 
+## Version resource and manifest
+
+`PixelFlow.spec` gives the exe a version resource (Properties → Details:
+publisher "MELEJ", the one name used by all these projects and the one the
+code-signing certificate should carry, and the version `build_release.ps1`
+stamps into `backend/_version.py`) and a manifest with the UTF-8 active code
+page and PerMonitorV2 DPI awareness, both written by
+`scripts/windows_resources.py` (K8, tested in
+`tests/test_windows_resources.py`; checked on 2026-10-20 by building a probe
+exe with the same files: the Details tab shows MELEJ / PixelFlow / the
+version, and the embedded manifest carries both settings).
+
 ## Frontend checks (lint, unit tests, browser smoke test)
 
 The frontend has a dev-only Node toolchain (`package.json`, committed

@@ -344,6 +344,50 @@
     return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
   }
 
+  // F24: a saved workflow also carries the API prompt the Queue button would
+  // send (extra.pixelflow_prompt), so the MCP server (backend/mcp_server.py)
+  // can run it without a browser. It's stripped again on load: the graph is
+  // the source of truth, and a stale copy must not ride along.
+  const SAVED_PROMPT_KEY = "pixelflow_prompt";
+
+  function withSavedPrompt(serialized, prompt) {
+    return { ...serialized, extra: { ...(serialized.extra || {}), [SAVED_PROMPT_KEY]: prompt } };
+  }
+
+  function withoutSavedPrompt(data) {
+    if (!data || !data.extra || !(SAVED_PROMPT_KEY in data.extra)) return data;
+    const extra = { ...data.extra };
+    delete extra[SAVED_PROMPT_KEY];
+    return { ...data, extra };
+  }
+
+  // One line of the System panel's download list (F23).
+  function describeDownload(job) {
+    const name = job.filename || job.url;
+    const where = job.folder ? ` → ${job.folder}` : "";
+    if (job.status === "resolving") return `${name}: finding the file…`;
+    if (job.status === "downloading") {
+      const pct = job.total ? ` ${Math.floor((100 * job.bytes) / job.total)}%` : "";
+      const of = job.total ? ` / ${formatBytes(job.total)}` : "";
+      return `${name}${where}:${pct} (${formatBytes(job.bytes)}${of})`;
+    }
+    if (job.status === "done") return `${name}${where}: done${job.verified ? ", SHA-256 verified" : " (no hash published)"}`;
+    if (job.status === "cancelled") return `${name}: cancelled`;
+    return `${name}: failed — ${job.error || "unknown error"}`;
+  }
+
+  // The System panel's "Custom nodes" line from /api/system's custom_nodes (F22).
+  function describeCustomNodes(plugins) {
+    if (!Array.isArray(plugins) || !plugins.length) return "none (data folder's custom_nodes)";
+    return plugins
+      .map((p) => {
+        const count = (p.nodes || []).length;
+        const nodes = `${count} node${count === 1 ? "" : "s"}`;
+        return p.error ? `${p.name}: failed, see the log${count ? ` (${nodes})` : ""}` : `${p.name}: ${nodes}`;
+      })
+      .join("; ");
+  }
+
   /** Extra text for a queue row: "#2 in queue", or how long it ran. */
   function queueDetail(entry, position, now) {
     if (!entry) return "";
@@ -586,6 +630,10 @@
     workflowFromPngChunks,
     formatDuration,
     formatBytes,
+    describeCustomNodes,
+    describeDownload,
+    withSavedPrompt,
+    withoutSavedPrompt,
     queueDetail,
     progressText,
     overallProgress,

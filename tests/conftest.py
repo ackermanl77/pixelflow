@@ -43,11 +43,17 @@ def isolated_data_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "MODELS_DIR", models_dir)
     monkeypatch.setattr(paths, "CHECKPOINT_DIR", dirs["checkpoints"])
     monkeypatch.setattr(paths, "LORA_DIR", dirs["loras"])
+    dirs["embeddings"] = models_dir / "embeddings"
+    monkeypatch.setattr(paths, "EMBEDDING_DIR", dirs["embeddings"])
     dirs["controlnet"] = models_dir / "controlnet"
     monkeypatch.setattr(paths, "CONTROLNET_DIR", dirs["controlnet"])
     dirs["upscale_models"] = models_dir / "upscale_models"
     monkeypatch.setattr(paths, "UPSCALE_MODEL_DIR", dirs["upscale_models"])
     monkeypatch.setattr(paths, "LOG_DIR", tmp_path / "logs")
+    dirs["wildcards"] = tmp_path / "wildcards"
+    monkeypatch.setattr(paths, "WILDCARD_DIR", dirs["wildcards"])
+    dirs["custom_nodes"] = tmp_path / "custom_nodes"
+    monkeypatch.setattr(paths, "CUSTOM_NODES_DIR", dirs["custom_nodes"])
     for name, key in (("OUTPUT_DIR", "outputs"), ("UPLOAD_DIR", "uploads"), ("WORKFLOW_DIR", "workflows"), ("TEMP_DIR", "temp")):
         monkeypatch.setattr(paths, name, dirs[key])
     # The app-wide queue persists finished prompts; keep that out of the repo too.

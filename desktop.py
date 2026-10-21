@@ -245,6 +245,12 @@ def main() -> int | None:
         # Frontend, WebView2 runtime, torch/CUDA, diffusers and a real prompt through the
         # embedded server (throwaway data folder), then exit -- no window (backend/selftest.py).
         return run_self_test(desktop=sys.modules[__name__])
+    if "--mcp" in sys.argv[1:]:
+        # F24: an MCP server on stdio for assistants, driving the PixelFlow that's already
+        # running (backend/mcp_server.py) -- no window, no server of its own.
+        from backend import mcp_server
+
+        return mcp_server.main()
     # Before anything else, so even an import failure of the backend in the
     # frozen app lands in logs/pixelflow.log (the build has no console).
     from backend.logging_setup import setup_logging
@@ -256,6 +262,9 @@ def main() -> int | None:
         thread = threading.Thread(target=_run_server, args=(port,), daemon=True)
         thread.start()
         _wait_for_server(thread, port=port)
+        from backend import mcp_server
+
+        mcp_server.record_server(port)  # so `PixelFlow.exe --mcp` finds a fallback port too
     elif _focus_existing_window():
         # A second launch (R5): bring the running PixelFlow's window forward instead
         # of opening another window on the same server.
@@ -270,6 +279,10 @@ def main() -> int | None:
         webview.start(gui="edgechromium")
     finally:
         _shutdown(thread)
+        if own_server:
+            from backend import mcp_server
+
+            mcp_server.forget_server(port)
 
 
 if __name__ == "__main__":

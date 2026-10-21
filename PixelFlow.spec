@@ -1,8 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import importlib.util
+import os
+import sys
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
+
+# K8: the version resource (publisher MELEJ, the version build_release.ps1 stamps into
+# backend/_version.py) and the manifest (UTF-8 active code page, PerMonitorV2), from
+# scripts/windows_resources.py. SPECPATH/workpath are PyInstaller's globals.
+sys.path.insert(0, os.path.join(SPECPATH, "scripts"))
+import windows_resources  # noqa: E402
+
+VERSION_PATH = windows_resources.write_version_file(workpath)
+MANIFEST_PATH = windows_resources.write_manifest(workpath)
 
 datas = [("frontend", "frontend")]
 binaries = []
@@ -81,6 +92,8 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    version=VERSION_PATH,
+    manifest=MANIFEST_PATH,
 )
 coll = COLLECT(
     exe,

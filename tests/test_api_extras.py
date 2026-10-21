@@ -180,7 +180,9 @@ def test_node_info_contract(client):
             "return_types",
             "return_names",
             "output_node",
+            "plugin",  # F22: the custom_nodes plugin that registered it, None for a built-in
         }, name
+        assert node["plugin"] is None, "only built-in nodes in the test data folder"
         assert set(node["input_types"]) <= {"required", "optional"}, "hidden inputs are not sent"
         assert len(node["return_types"]) == len(node["return_names"])
     sampler = info["KSampler"]

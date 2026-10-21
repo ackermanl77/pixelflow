@@ -170,6 +170,23 @@
       <dl id="system-info" class="system-info"></dl>
       <h4>Loaded models</h4>
       <ul id="system-models" class="system-models"></ul>
+      <h4>Download a model</h4>
+      <form id="download-form" class="download-form">
+        <input id="download-url" type="url" required aria-label="Model link"
+               placeholder="Hugging Face file link or Civitai model page">
+        <select id="download-kind" aria-label="Models folder">
+          <option value="auto">Folder: automatic</option>
+          <option value="checkpoints">checkpoints</option>
+          <option value="loras">loras</option>
+          <option value="embeddings">embeddings</option>
+          <option value="controlnet">controlnet</option>
+          <option value="upscale_models">upscale_models</option>
+        </select>
+        <button type="submit">Download</button>
+      </form>
+      <p class="hint">The file is checked against the SHA-256 the site lists before it appears in models/.
+        Reload the page afterwards to see it in the model lists.</p>
+      <ul id="download-list" class="system-models"></ul>
       <div class="modal-actions">
         <button id="btn-open-logs" title="Open the folder with pixelflow.log">Open log folder</button>
         <button id="btn-free-memory" title="Unload all models and free GPU memory">Free memory</button>
