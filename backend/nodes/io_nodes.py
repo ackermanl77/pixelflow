@@ -342,6 +342,27 @@ class PreviewImage(NodeBase):
         return {"images": names, "type": "temp"}
 
 
+@register_node("Image Compare")
+class ImageCompare(NodeBase):
+    """A/B comparison (report item F28): shows `image_a` and `image_b` in the
+    node with a split that follows the mouse -- before/after an upscale, two
+    seeds, two models. Like Preview Image, the files go to temp/."""
+
+    CATEGORY = "output"
+    RETURN_TYPES = ()
+    FUNCTION = "compare"
+    OUTPUT_NODE = True
+    DESCRIPTION = "Compare two images with a split slider inside the node."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"image_a": ("IMAGE",), "image_b": ("IMAGE",)}}
+
+    def compare(self, image_a, image_b):
+        names = [_save_temp(as_image_list(img)[0], f"compare_{side}", TEMP_DIR) for side, img in (("a", image_a), ("b", image_b))]
+        return {"images": names, "type": "temp", "compare": True}
+
+
 # ---- Save Image naming (report item B17) ----
 
 _save_lock = threading.Lock()

@@ -1,0 +1,12 @@
+{
+  "nodes": [
+    {"id": "image", "type": "LoadImage", "pos": [50, 120]},
+    {"id": "upscale", "type": "ImageResize", "pos": [380, 60], "values": {"width": 1024, "height": 1024}},
+    {"id": "compare", "type": "ImageCompare", "pos": [700, 120]}
+  ],
+  "links": [
+    ["image", 0, "upscale", "image"],
+    ["image", 0, "compare", "image_a"],
+    ["upscale", 0, "compare", "image_b"]
+  ]
+}

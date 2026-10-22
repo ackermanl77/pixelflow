@@ -27,6 +27,7 @@ def main() -> None:
         PIXELFLOW_HOME=str(home),
         PIXELFLOW_MODELS_DIR=str(home / "models"),
         PIXELFLOW_PORT=str(port),
+        PIXELFLOW_COMFYUI_MODEL_PATHS="0",  # never the real ComfyUI library (B25)
     )
     sys.path.insert(0, str(ROOT))
     import uvicorn  # after the environment: backend.paths reads it at import

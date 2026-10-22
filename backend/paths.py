@@ -96,6 +96,11 @@ LORA_DIR = MODELS_DIR / "loras"
 EMBEDDING_DIR = MODELS_DIR / "embeddings"
 CONTROLNET_DIR = MODELS_DIR / "controlnet"
 UPSCALE_MODEL_DIR = MODELS_DIR / "upscale_models"
+# Split-file models (B26), ComfyUI's layout: the diffusion model (UNet/transformer),
+# its text encoders and its VAE as separate single files.
+DIFFUSION_MODEL_DIR = MODELS_DIR / "diffusion_models"
+TEXT_ENCODER_DIR = MODELS_DIR / "text_encoders"
+VAE_DIR = MODELS_DIR / "vae"
 # Finished prompts, one JSON object per line (see engine/queue.py).
 HISTORY_PATH = ROOT_DIR / "history.jsonl"
 # The output cache's copy on disk (engine.disk_cache): the last run's node outputs.
@@ -112,7 +117,7 @@ def ensure_data_dirs() -> None:
     """Create the data folders. Failures are logged, not raised: a
     read-only location must not stop the server from starting."""
     for folder in (OUTPUT_DIR, UPLOAD_DIR, WORKFLOW_DIR, TEMP_DIR, CHECKPOINT_DIR, LORA_DIR, EMBEDDING_DIR, CONTROLNET_DIR,
-                   UPSCALE_MODEL_DIR, WILDCARD_DIR, CUSTOM_NODES_DIR):
+                   UPSCALE_MODEL_DIR, DIFFUSION_MODEL_DIR, TEXT_ENCODER_DIR, VAE_DIR, WILDCARD_DIR, CUSTOM_NODES_DIR):
         try:
             folder.mkdir(parents=True, exist_ok=True)
         except OSError:

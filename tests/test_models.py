@@ -46,7 +46,8 @@ def test_models_endpoint_and_checkpoint_combo(isolated_data_dirs, monkeypatch):
     client = TestClient(main.app, base_url=BASE)
     assert client.get("/api/models/checkpoints").json() == ["local.safetensors", models.DEFAULT_CHECKPOINT]
     assert client.get("/api/models/loras").json() == []
-    assert client.get("/api/models/vae").status_code == 404
+    assert client.get("/api/models/vae").json() == []  # a split-file kind now (B26)
+    assert client.get("/api/models/nope").status_code == 404
     spec = client.get("/api/nodes").json()["LoadCheckpoint"]["input_types"]
     choices, config = spec["required"]["ckpt_name"]
     assert choices == ["local.safetensors", models.DEFAULT_CHECKPOINT]

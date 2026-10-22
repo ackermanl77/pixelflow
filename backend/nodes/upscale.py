@@ -13,7 +13,7 @@ from typing import List
 
 from PIL import Image
 
-from .. import paths
+from .. import model_roots, paths
 from . import runtime
 from .base import NodeBase, map_images, register_node
 
@@ -30,7 +30,11 @@ def upscale_dir() -> Path:
 
 
 def list_upscale_models() -> List[str]:
-    folder = upscale_dir()
+    """Upscalers in models/upscale_models/ and the ComfyUI library's folders (B25)."""
+    return model_roots.merge_names(_list_folder(folder) for folder in [upscale_dir(), *model_roots.extra_roots("upscale_models")])
+
+
+def _list_folder(folder: Path) -> List[str]:
     if not folder.is_dir():
         return []
     return sorted(
@@ -39,13 +43,21 @@ def list_upscale_models() -> List[str]:
     )
 
 
+def _find(name: str) -> Path | None:
+    for folder in [upscale_dir(), *model_roots.extra_roots("upscale_models")]:
+        try:
+            path = paths.safe_path(folder, name)
+        except paths.PathTraversalError:
+            return None
+        if path.is_file():
+            return path
+    return None
+
+
 def load_upscale_model(name: str):
     """A spandrel ImageModelDescriptor for models/upscale_models/<name> (one cached)."""
-    try:
-        path = paths.safe_path(upscale_dir(), name)
-    except paths.PathTraversalError:
-        raise FileNotFoundError(f"upscale model '{name}' is not in models/upscale_models/") from None
-    if not path.is_file():
+    path = _find(name)
+    if path is None:
         raise FileNotFoundError(f"upscale model '{name}' is not in models/upscale_models/")
     key = (str(path), path.stat().st_mtime_ns)
     with _cache_lock:

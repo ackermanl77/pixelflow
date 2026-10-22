@@ -22,9 +22,21 @@ a Hugging Face file a guess from its name and path ("lora", "controlnet",
 The file is written as <name>.part and renamed when complete and verified,
 so a cancelled, failed or mismatching download never appears in a model
 list; an existing file with the same name is never overwritten. Downloads run
-as background jobs (DownloadManager); /api/models/download(s) in main.py."""
+as background jobs (DownloadManager); /api/models/download(s) in main.py.
+
+Resuming (F26): when the connection drops, <name>.part stays, next to a
+<name>.part.dl-meta sidecar (format version, URL, source, size, SHA-256 and
+the server's ETag/Last-Modified). Starting the same download again -- even
+after a restart -- re-hashes the bytes already there and asks for the rest
+with Range + If-Range; a server that answers 200 instead of 206 (the file
+changed, or no range support) restarts it from zero. Cancelling, a hash
+mismatch or a refused download discard the partial file.
+
+Gated models (F26): a Hugging Face 401/403 carries the repository page as the
+error's help_url, so the UI can open it for the user to accept the licence."""
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -48,6 +60,9 @@ MODEL_FOLDERS = {
     "embeddings": lambda: paths.EMBEDDING_DIR,
     "controlnet": lambda: paths.CONTROLNET_DIR,
     "upscale_models": lambda: paths.UPSCALE_MODEL_DIR,
+    "diffusion_models": lambda: paths.DIFFUSION_MODEL_DIR,
+    "text_encoders": lambda: paths.TEXT_ENCODER_DIR,
+    "vae": lambda: paths.VAE_DIR,
 }
 CIVITAI_TYPES = {
     "checkpoint": "checkpoints",
@@ -68,7 +83,12 @@ _CIVITAI_DOWNLOAD = re.compile(r"^/api/download/models/(?P<version>\d+)/?$")
 
 
 class DownloadError(ValueError):
-    """A link that can't be downloaded, or a download that failed its check."""
+    """A link that can't be downloaded, or a download that failed its check.
+    `help_url` is a page that fixes it (a gated model's licence page)."""
+
+    def __init__(self, message: str, help_url: Optional[str] = None):
+        super().__init__(message)
+        self.help_url = help_url
 
 
 class DownloadCancelled(Exception):
@@ -134,7 +154,11 @@ def _resolve_huggingface(path: str, head: Callable) -> Plan:
         headers["Authorization"] = f"Bearer {token}"
     response = head(url, headers)
     if response.status_code in (401, 403):
-        raise DownloadError(f"{repo} needs a Hugging Face login with access to it (huggingface-cli login, or HF_TOKEN)")
+        raise DownloadError(
+            f"{repo} is gated or private: open its page, log in and accept the licence, then make sure PixelFlow "
+            "has your Hugging Face token (huggingface-cli login, or HF_TOKEN)",
+            help_url=f"https://huggingface.co/{repo}",
+        )
     if response.status_code == 404:
         raise DownloadError(f"{file_path} is not in {repo} at {revision}")
     if response.status_code >= 400:
@@ -239,9 +263,56 @@ def sha256_of(path: Path) -> str:
     return digest.hexdigest()
 
 
+META_VERSION = 1
+
+
+def _meta_path(part: Path) -> Path:
+    return part.with_name(part.name + ".dl-meta")
+
+
+def read_resume_meta(part: Path, plan: Plan) -> Optional[dict]:
+    """The sidecar of a .part this plan can resume, or None (none, unreadable,
+    another format version, or a different file/hash/size)."""
+    try:
+        meta = json.loads(_meta_path(part).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(meta, dict) or meta.get("version") != META_VERSION:
+        return None
+    if meta.get("url") != plan.url or meta.get("sha256") != plan.sha256 or meta.get("size") != plan.size:
+        return None
+    return meta
+
+
+def _write_meta(part: Path, plan: Plan, response_headers) -> None:
+    meta = {
+        "version": META_VERSION, "url": plan.url, "source": plan.source, "size": plan.size, "sha256": plan.sha256,
+        "etag": response_headers.get("ETag") or response_headers.get("X-Linked-Etag"),
+        "last_modified": response_headers.get("Last-Modified"),
+    }
+    try:
+        _meta_path(part).write_text(json.dumps(meta), encoding="utf-8")
+    except OSError:
+        logger.warning("could not write the resume sidecar for %s", part, exc_info=True)
+
+
+def _discard(part: Path) -> None:
+    for path in (part, _meta_path(part)):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def _gated_help(plan: Plan) -> Optional[str]:
+    match = re.match(r"^huggingface:(?P<repo>[^@]+)@", plan.source or "")
+    return f"https://huggingface.co/{match.group('repo')}" if match else None
+
+
 def download(plan: Plan, on_progress: Optional[Callable[[int, Optional[int]], None]] = None,
              cancelled: Callable[[], bool] = lambda: False, session=None) -> Path:
-    """Fetch the planned file into its models/ folder and return its path."""
+    """Fetch the planned file into its models/ folder and return its path,
+    resuming an interrupted .part when its sidecar matches (F26)."""
     folder = MODEL_FOLDERS[plan.kind]()
     folder.mkdir(parents=True, exist_ok=True)
     target = paths.safe_path(folder, plan.filename)
@@ -252,22 +323,52 @@ def download(plan: Plan, on_progress: Optional[Callable[[int, Optional[int]], No
     part = target.with_name(target.name + ".part")
     digest = hashlib.sha256()
     received = 0
+    headers = dict(plan.headers)
+    meta = read_resume_meta(part, plan) if part.is_file() else None
+    if meta is not None:
+        with open(part, "rb") as handle:
+            for block in iter(lambda: handle.read(CHUNK_BYTES), b""):
+                digest.update(block)
+                received += len(block)
+        validator = meta.get("etag") or meta.get("last_modified")
+        headers["Range"] = f"bytes={received}-"
+        if validator:
+            headers["If-Range"] = validator
+        logger.info("resuming %s at %d bytes", plan.filename, received)
+    elif part.exists():
+        _discard(part)  # a leftover from another file or version: start over
     complete = False
+    keep_partial = meta is not None  # a resume that fails to connect keeps what it had
     try:
-        with (session or requests).get(plan.url, headers=plan.headers, stream=True, timeout=TIMEOUT) as response:
+        with (session or requests).get(plan.url, headers=headers, stream=True, timeout=TIMEOUT) as response:
             if response.status_code in (401, 403):
                 raise DownloadError("the site refused the download: this model needs a login token "
-                                    "(HF_TOKEN / huggingface-cli login, or civitai_token in settings.json)")
-            if response.status_code >= 400:
+                                    "(HF_TOKEN / huggingface-cli login, or civitai_token in settings.json) "
+                                    "and, for a gated model, its licence accepted on the model page",
+                                    help_url=_gated_help(plan))
+            if response.status_code == 416 and received and (plan.size is None or received >= plan.size):
+                response = None  # the .part already holds the whole file
+            elif response.status_code >= 400:
                 raise DownloadError(f"the download failed with HTTP {response.status_code}")
-            content_type = response.headers.get("Content-Type", "")
-            if content_type.startswith("text/html"):
-                raise DownloadError("the site sent a web page instead of the file (a login or consent page?)")
-            total = plan.size or (int(response.headers["Content-Length"])
-                                  if response.headers.get("Content-Length", "").isdigit() else None)
-            with open(part, "wb") as handle:
-                for chunk in response.iter_content(CHUNK_BYTES):
+            mode = "ab"
+            if response is not None:
+                content_type = response.headers.get("Content-Type", "")
+                if content_type.startswith("text/html"):
+                    raise DownloadError("the site sent a web page instead of the file (a login or consent page?)")
+                if received and response.status_code != 206:
+                    logger.info("%s: the server sent the whole file again; restarting", plan.filename)
+                    digest, received = hashlib.sha256(), 0
+                if not received:
+                    mode = "wb"
+            total = plan.size or (received + int(response.headers["Content-Length"])
+                                  if response is not None and response.headers.get("Content-Length", "").isdigit() else None)
+            if response is not None:
+                _write_meta(part, plan, response.headers)
+                keep_partial = True
+            with open(part, mode) as handle:
+                for chunk in (response.iter_content(CHUNK_BYTES) if response is not None else ()):
                     if cancelled():
+                        keep_partial = False
                         raise DownloadCancelled()
                     if not chunk:
                         continue
@@ -277,20 +378,24 @@ def download(plan: Plan, on_progress: Optional[Callable[[int, Optional[int]], No
                     if on_progress is not None:
                         on_progress(received, total)
         if plan.sha256 and digest.hexdigest() != plan.sha256:
+            keep_partial = False
             raise DownloadError(f"{plan.filename}: SHA-256 doesn't match what the site lists "
                                 f"({digest.hexdigest()[:12]}... instead of {plan.sha256[:12]}...); file discarded")
         os.replace(part, target)
         complete = True
+        _discard(part)  # the sidecar
         logger.info("downloaded %s (%d bytes) from %s into %s", plan.filename, received, plan.source, folder)
         return target
     except requests.RequestException as exc:
+        if keep_partial:
+            raise DownloadError(f"the download was interrupted ({exc}); start it again to resume") from exc
         raise DownloadError(f"the download failed: {exc}") from exc
     finally:
-        if not complete:  # cancelled, failed or mismatching: never leave a partial file
-            try:
-                part.unlink()
-            except OSError:
-                pass
+        # Cancelled or mismatching: never leave a partial file. Anything else (a
+        # dropped connection, a server error, a licence still to accept) keeps it
+        # with its sidecar once data has arrived, so the next attempt resumes.
+        if not complete and not keep_partial:
+            _discard(part)
 
 
 # --------------------------------------------------------------------- jobs
@@ -308,6 +413,7 @@ class DownloadJob:
     total: Optional[int] = None
     verified: Optional[bool] = None
     error: Optional[str] = None
+    help_url: Optional[str] = None  # F26: e.g. a gated model's page, to accept its licence
     started_at: float = field(default_factory=time.time)
 
 
@@ -352,6 +458,7 @@ class DownloadManager:
             job.status = "cancelled"
         except (DownloadError, requests.RequestException, OSError, ValueError) as exc:
             job.status, job.error = "error", str(exc)
+            job.help_url = getattr(exc, "help_url", None)
             logger.warning("download of %s failed: %s", job.url, exc)
         except Exception as exc:  # noqa: BLE001 - a job must never die silently
             job.status, job.error = "error", f"{type(exc).__name__}: {exc}"

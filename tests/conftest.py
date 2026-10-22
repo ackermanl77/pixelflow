@@ -1,6 +1,6 @@
 import pytest
 
-from backend import main, paths
+from backend import main, model_roots, paths
 from backend.nodes import io_nodes
 
 
@@ -49,6 +49,12 @@ def isolated_data_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "CONTROLNET_DIR", dirs["controlnet"])
     dirs["upscale_models"] = models_dir / "upscale_models"
     monkeypatch.setattr(paths, "UPSCALE_MODEL_DIR", dirs["upscale_models"])
+    for name, attr in (("diffusion_models", "DIFFUSION_MODEL_DIR"), ("text_encoders", "TEXT_ENCODER_DIR"), ("vae", "VAE_DIR")):
+        dirs[name] = models_dir / name
+        monkeypatch.setattr(paths, attr, dirs[name])
+    # Never read the developer's real ComfyUI model library (B25); tests opt in.
+    monkeypatch.setenv("PIXELFLOW_COMFYUI_MODEL_PATHS", "0")
+    model_roots.reset_cache()
     monkeypatch.setattr(paths, "LOG_DIR", tmp_path / "logs")
     dirs["wildcards"] = tmp_path / "wildcards"
     monkeypatch.setattr(paths, "WILDCARD_DIR", dirs["wildcards"])

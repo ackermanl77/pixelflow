@@ -274,6 +274,12 @@ re-create any single image of a batch.
   screen), and an `opacity` slider.
 - **Text Overlay** — draws `text` at `x`/`y` with a `size` and `color`.
 
+**Remove Background** keeps the subject -- people, animals, objects (COCO
+panoptic Mask2Former, downloaded once, ~190 MB) -- and makes the rest
+transparent, white, black or green, with a MASK of the subject; **feather**
+softens the edge. **Image Compare** (output) shows two images in the node with
+a split that follows the mouse: A on the left, B on the right.
+
 ### output
 
 - **Preview Image** — shows the image in the gallery and inside the node
@@ -393,7 +399,22 @@ a cancelled, failed or mismatching download leaves nothing behind, and an
 existing file is never overwritten. Reload the page to see it in the model
 lists. Gated Hugging Face models use the token `huggingface-cli login` saved
 (or `HF_TOKEN`); Civitai models that need an account use `{"civitai_token":
-"…"}` in `settings.json` (or `CIVITAI_TOKEN`).
+"…"}` in `settings.json` (or `CIVITAI_TOKEN`). When a gated model refuses the
+download, the list shows **Open the model page**: log in there and accept its
+licence, then download again. If the connection drops, the partial file is
+kept: start the same download again (even after a restart) and it carries on
+where it stopped, still checked against the full SHA-256. The folder list also
+has `diffusion_models`, `text_encoders` and `vae` for ComfyUI-style split models.
+
+**Connect an assistant (MCP)** shows the configuration to paste into Claude
+Desktop (Settings > Developer > Edit Config) or another MCP client, with a
+**Copy configuration** button, and the one-line `claude mcp add …` for Claude
+Code (see "Using PixelFlow from an AI assistant" below).
+
+If a delete fails because another program has the file open (an image viewer,
+an editor), the message names that program so you can close it. If torch
+can't start because the Microsoft Visual C++ runtime is missing, the error
+says which DLL is missing and links the installer.
 
 The **Custom nodes** line lists the plugins loaded from the data folder's
 `custom_nodes\` (see "Custom nodes" below).
@@ -436,6 +457,15 @@ the running app noted in `server.json` in the data folder, then at 8288.
   PixelFlow already kept its data there.
 - `wildcards\` (prompt wildcard files) and `custom_nodes\` (plugins) are in
   the data folder too; `models\embeddings\` holds textual-inversion embeddings.
+- **Sharing ComfyUI's models**: if Comfy Desktop is installed, the folders
+  its `extra_model_paths.yaml` lists are added after PixelFlow's own for each
+  kind (checkpoints, loras, embeddings, controlnet, upscale_models,
+  diffusion_models/unet, text_encoders/clip, vae), so a big library on another
+  drive is used where it is. PixelFlow's own `models\` folder wins when a name
+  exists in both, and downloads always go there. Point at other yaml files with
+  `{"comfyui_model_paths": ["D:/ComfyUI/extra_model_paths.yaml"]}` in
+  `settings.json` (or `PIXELFLOW_COMFYUI_MODEL_PATHS`), or turn it off with
+  `false` / `0`.
 - `PIXELFLOW_HOME` overrides the data folder; `PIXELFLOW_MODELS_DIR` (or
   `{"models_dir": "D:/sd-models"}` in `settings.json` in the data folder)
   keeps big models somewhere else, e.g. on a drive OneDrive doesn't sync.
@@ -456,8 +486,11 @@ img2img sampler), **Inpaint** (Load Image + Load Mask → inpaint sampler),
 **Hires fix** (generate at 512, resize to 1024, re-sample at 0.4 denoise) and
 **Upscale** (Load Image → 2× resize → light re-sample). Each is set up for the
 default sd-turbo checkpoint (few steps, cfg 0); upload an image/mask into the
-Load nodes and adjust the prompt. Loading one replaces the graph (it asks
-first when there are unsaved changes).
+Load nodes and adjust the prompt. **Remove background** cuts the subject out of
+an uploaded image, and **Compare before / after** shows an image and a
+processed copy in an Image Compare node. Loading one replaces the graph (it
+asks first when there are unsaved changes); tick **Add to the current graph**
+to drop it beside what you have instead, selected, as a reusable block.
 
 **Load Example** is the Text to image template: Load Checkpoint → CLIP Text Encode: Load Checkpoint → CLIP Text Encode
 (with a sample prompt) → Empty Image → KSampler → Save Image, fully wired.

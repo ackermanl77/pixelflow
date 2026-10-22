@@ -56,10 +56,12 @@ def test_a_chosen_folder_wins_and_small_non_lfs_files_have_no_hash():
     assert plan.kind == "embeddings" and plan.sha256 is None
 
 
-@pytest.mark.parametrize("status, message", [(401, "needs a Hugging Face login"), (404, "is not in a/b at main")])
+@pytest.mark.parametrize("status, message", [(401, "is gated or private"), (404, "is not in a/b at main")])
 def test_hugging_face_errors_are_explained(status, message):
-    with pytest.raises(md.DownloadError, match=message):
+    with pytest.raises(md.DownloadError, match=message) as caught:
         md.resolve("https://huggingface.co/a/b/resolve/main/x.safetensors", head=_head(status=status))
+    # F26: a gated repository's page, where the licence is accepted.
+    assert caught.value.help_url == ("https://huggingface.co/a/b" if status == 401 else None)
 
 
 CIVITAI_VERSION = {
@@ -119,12 +121,40 @@ def test_a_long_name_keeps_its_extension():
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
+    # /drop sends the first half of the body and closes the connection while the
+    # `drop` flag is set (F26); /file and /drop honour Range when If-Range matches.
+    drop = False
+    ranges: list = []
+
     def do_GET(self):  # noqa: N802 - http.server's naming
         if self.path == "/login":
             payload, content_type = b"<html>please log in</html>", "text/html; charset=utf-8"
         else:
             payload, content_type = BODY, "application/octet-stream"
+        requested = self.headers.get("Range")
+        _Handler.ranges.append(requested)
+        if requested and self.path != "/login" and self.headers.get("If-Range") in (None, '"v1"'):
+            start = int(requested.split("=")[1].rstrip("-"))
+            self.send_response(206)
+            self.send_header("Content-Type", content_type)
+            self.send_header("ETag", '"v1"')
+            self.send_header("Content-Range", f"bytes {start}-{len(payload) - 1}/{len(payload)}")
+            self.send_header("Content-Length", str(len(payload) - start))
+            self.end_headers()
+            self.wfile.write(payload[start:])
+            return
+        if self.path == "/drop" and _Handler.drop:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("ETag", '"v1"')
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload[: len(payload) // 2])
+            self.wfile.flush()
+            self.connection.shutdown(2)
+            return
         self.send_response(200)
+        self.send_header("ETag", '"v1"')
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
@@ -161,6 +191,36 @@ def test_a_hash_mismatch_leaves_nothing_behind(file_server, isolated_data_dirs):
     with pytest.raises(md.DownloadError, match="SHA-256 doesn't match"):
         md.download(_plan(file_server, sha="b" * 64, kind="checkpoints", name="bad.safetensors"))
     assert list(isolated_data_dirs["checkpoints"].iterdir()) == []
+
+
+def test_an_interrupted_download_resumes_from_its_part_file(file_server, isolated_data_dirs, monkeypatch):
+    """F26: the connection drops half-way -> .part + sidecar stay; the next attempt
+    asks for the rest with Range/If-Range and the hash still covers the whole file."""
+    monkeypatch.setattr(md, "CHUNK_BYTES", 4096)  # so half the body arrives before the drop
+    _Handler.drop, _Handler.ranges = True, []
+    plan = _plan(file_server, path="/drop", kind="vae", name="v.safetensors")
+    with pytest.raises(md.DownloadError, match="start it again to resume"):
+        md.download(plan)
+    folder = isolated_data_dirs["vae"]
+    part = folder / "v.safetensors.part"
+    assert part.is_file() and 0 < part.stat().st_size < len(BODY)
+    assert md.read_resume_meta(part, plan)["etag"] == '"v1"'
+    _Handler.drop = False
+    progress = []
+    path = md.download(plan, lambda received, total: progress.append(received))
+    assert path.read_bytes() == BODY
+    assert _Handler.ranges[-1] == f"bytes={len(BODY) // 2}-"
+    assert sorted(p.name for p in folder.iterdir()) == ["v.safetensors"], "the sidecar is gone too"
+
+
+def test_a_part_file_from_another_download_is_not_resumed(file_server, isolated_data_dirs):
+    folder = isolated_data_dirs["loras"]
+    folder.mkdir(parents=True)
+    (folder / "style.safetensors.part").write_bytes(b"stale bytes")
+    (folder / "style.safetensors.part.dl-meta").write_text('{"version": 1, "url": "https://elsewhere"}')
+    _Handler.ranges = []
+    assert md.download(_plan(file_server)).read_bytes() == BODY
+    assert _Handler.ranges == [None]
 
 
 def test_a_login_page_and_a_cancel_are_refused_cleanly(file_server, isolated_data_dirs):

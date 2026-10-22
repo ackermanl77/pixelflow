@@ -91,7 +91,9 @@ def _check_files(log: Callable[[str], None]) -> bool:
 
 
 def _check_torch(log: Callable[[str], None]) -> bool:
-    import torch
+    from backend.nodes.runtime import torch as load_torch
+
+    torch = load_torch()  # names a missing VC++ runtime DLL if the import fails (R8)
 
     log(f"ok    torch {torch.__version__} (CUDA build: {torch.version.cuda or 'none'})")
     if not torch.cuda.is_available():

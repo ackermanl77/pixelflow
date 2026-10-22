@@ -208,6 +208,49 @@ const nodeErrors = new Map(); // node id -> {message, input}
 let runningNodeId = null;
 const livePreviews = new Map(); // node id -> Image (latent preview while sampling, F10)
 const outputPreviews = new Map(); // node id -> Image (last output of a Save/Preview node, F13)
+const comparePreviews = new Map(); // node id -> [Image A, Image B] (Image Compare, F28)
+
+// Image Compare (F28): A on the left of the split, B on the right; the split
+// follows the mouse over the node (node.compareSplit, 0..1).
+function drawComparePreview(node, ctx, pair) {
+  const [a, b] = pair;
+  if (!a.complete || !a.naturalWidth || !b.complete || !b.naturalWidth) return;
+  const top = node.computeSize()[1] + 4;
+  const maxW = node.size[0] - 16;
+  const maxH = Math.max(0, node.size[1] - top - 8);
+  if (maxH < 24) {
+    node.size[1] = top + 160;
+    return;
+  }
+  const scale = Math.min(maxW / a.naturalWidth, maxH / a.naturalHeight);
+  const w = a.naturalWidth * scale;
+  const h = a.naturalHeight * scale;
+  const x = (node.size[0] - w) / 2;
+  const split = Math.min(1, Math.max(0, node.compareSplit ?? 0.5));
+  node.compareBox = [x, top, w, h];
+  ctx.drawImage(a, x, top, w, h);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x + w * split, top, w * (1 - split), h);
+  ctx.clip();
+  ctx.drawImage(b, x, top, w, h);
+  ctx.restore();
+  ctx.save();
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x + w * split, top);
+  ctx.lineTo(x + w * split, top + h);
+  ctx.stroke();
+  ctx.font = "11px sans-serif";
+  ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+  ctx.fillRect(x + 4, top + 4, 16, 16);
+  ctx.fillRect(x + w - 20, top + 4, 16, 16);
+  ctx.fillStyle = "#fff";
+  ctx.fillText("A", x + 8, top + 16);
+  ctx.fillText("B", x + w - 16, top + 16);
+  ctx.restore();
+}
 
 function drawNodeDecorations(node, ctx) {
   const titleH = LiteGraph.NODE_TITLE_HEIGHT;
@@ -227,8 +270,10 @@ function drawNodeDecorations(node, ctx) {
     ctx.strokeRect(-3, -titleH - 3, node.size[0] + 6, node.size[1] + titleH + 6);
     ctx.restore();
   }
+  const pair = comparePreviews.get(node.id);
   const preview = livePreviews.get(node.id) || outputPreviews.get(node.id);
-  if (preview && !node.uploadComboName) drawImageBelowWidgets(node, ctx, preview);
+  if (pair) drawComparePreview(node, ctx, pair);
+  else if (preview && !node.uploadComboName) drawImageBelowWidgets(node, ctx, preview);
   drawNodeError(node, ctx);
 }
 
@@ -307,6 +352,15 @@ function makeNodeClass(nodeName, def) {
     if (this.flags.collapsed) return;
     if (this.uploadComboName) drawUploadPreview(this, ctx);
     drawNodeDecorations(this, ctx);
+  };
+  NodeCtor.prototype.onMouseMove = function (event, localPos) {
+    // Image Compare (F28): move the split with the mouse over the images.
+    const box = this.compareBox;
+    if (!box || !comparePreviews.has(this.id)) return;
+    const [x, top, w, h] = box;
+    if (localPos[1] < top || localPos[1] > top + h) return;
+    this.compareSplit = Math.min(1, Math.max(0, (localPos[0] - x) / w));
+    this.setDirtyCanvas(true, false);
   };
   NodeCtor.prototype.getExtraMenuOptions = function () {
     return [
@@ -1154,7 +1208,9 @@ async function onExecutionSuccess(msg) {
   // F13: show each output node's newest image inside the node.
   for (const [nodeId, output] of Object.entries(msg.outputs || {})) {
     const node = graph.getNodeById(Number(nodeId));
-    if (node && output && Array.isArray(output.images) && output.images.length) {
+    if (node && output && output.compare && Array.isArray(output.images) && output.images.length === 2) {
+      comparePreviews.set(node.id, output.images.map((name) => loadImageForCanvas(Logic.imageUrl(name, output.type))));
+    } else if (node && output && Array.isArray(output.images) && output.images.length) {
       outputPreviews.set(node.id, loadImageForCanvas(Logic.imageUrl(output.images[output.images.length - 1], output.type)));
     }
   }
@@ -1444,6 +1500,7 @@ async function replaceGraph(data, question = "Replace the current graph?") {
   syncWidgetsFromProperties();
   clearNodeErrors();
   outputPreviews.clear();
+  comparePreviews.clear();
   pushHistory();
   updateEmptyState();
   return true;
@@ -1973,12 +2030,24 @@ async function runXyPlot() {
 // A template is {nodes: [{id, type, pos, values}], links: [[from id, output slot,
 // to id, input name]]} -- node ids are the template's own names, so the files stay
 // readable and independent of litegraph's serialization.
-function buildTemplateGraph(spec) {
-  graph.clear();
-  outputPreviews.clear();
+// With `insert` (F28), the template is added beside the current graph -- a
+// reusable block -- and selected, instead of replacing the graph.
+function buildTemplateGraph(spec, insert = false) {
+  let offset = [0, 0];
+  if (insert && graph._nodes.length) {
+    const right = Math.max(...graph._nodes.map((n) => n.pos[0] + n.size[0]));
+    const top = Math.min(...graph._nodes.map((n) => n.pos[1]));
+    const left = Math.min(...spec.nodes.map((entry) => entry.pos[0]));
+    const specTop = Math.min(...spec.nodes.map((entry) => entry.pos[1]));
+    offset = [right + 80 - left, top - specTop];
+  } else {
+    graph.clear();
+    outputPreviews.clear();
+    comparePreviews.clear();
+  }
   const nodes = new Map();
   for (const entry of spec.nodes) {
-    const node = addNodeToGraph(entry.type, entry.pos);
+    const node = addNodeToGraph(entry.type, [entry.pos[0] + offset[0], entry.pos[1] + offset[1]]);
     if (!node) throw new Error(`unknown node type "${entry.type}"`);
     for (const [name, value] of Object.entries(entry.values || {})) setNodeValue(node, name, value);
     nodes.set(entry.id, node);
@@ -1991,19 +2060,23 @@ function buildTemplateGraph(spec) {
   }
   canvas.setDirty(true, true);
   pushHistory();
-  markSaved("");
+  if (insert) {
+    canvas.selectNodes([...nodes.values()]);
+  } else {
+    markSaved("");
+  }
   updateEmptyState();
   fitView();
 }
 
-async function loadTemplate(file, title = file) {
-  if (isDirty() && !(await confirmModal("Unsaved changes", `Load the "${title}" template? Your unsaved changes will be lost.`, "Load template"))) {
+async function loadTemplate(file, title = file, insert = false) {
+  if (!insert && isDirty() && !(await confirmModal("Unsaved changes", `Load the "${title}" template? Your unsaved changes will be lost.`, "Load template"))) {
     return false;
   }
   try {
     const res = await fetch(`templates/${file}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    buildTemplateGraph(await res.json());
+    buildTemplateGraph(await res.json(), insert);
   } catch (err) {
     showToast(`Couldn't load the template: ${err.message}`, "error");
     return false;
@@ -2038,7 +2111,7 @@ async function openTemplates() {
       button.append(title, description);
       button.onclick = async () => {
         closeOverlay("template-overlay");
-        await loadTemplate(template.file, template.title);
+        await loadTemplate(template.file, template.title, document.getElementById("template-insert").checked);
       };
       list.append(button);
     }
@@ -2109,6 +2182,32 @@ async function openSystemPanel() {
     list.appendChild(li);
   }
   refreshDownloads();
+  refreshMcpConfig();
+}
+
+// ---- Connect an assistant (F27) ----
+
+let mcpConfig = null;
+
+async function refreshMcpConfig() {
+  try {
+    const res = await fetch("/api/mcp");
+    if (!res.ok) return;
+    mcpConfig = await res.json();
+  } catch (_) {
+    return;
+  }
+  document.getElementById("mcp-config").textContent = JSON.stringify(mcpConfig.json, null, 2);
+  document.getElementById("mcp-claude-code").textContent = mcpConfig.claude_code;
+}
+
+async function copyText(text, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(`${what} copied`);
+  } catch (_) {
+    showToast(`Could not copy the ${what.toLowerCase()}: select it and press Ctrl+C`, "error");
+  }
 }
 
 // ---- Model downloads (F23) ----
@@ -2130,6 +2229,15 @@ async function refreshDownloads() {
     const li = document.createElement("li");
     li.className = "download-list-item";
     li.textContent = Logic.describeDownload(job);
+    if (job.help_url) {
+      // F26: a gated model -- its page, to log in and accept the licence.
+      const link = document.createElement("a");
+      link.href = job.help_url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "Open the model page";
+      li.append(" ", link);
+    }
     if (job.status === "resolving" || job.status === "downloading") {
       const cancel = document.createElement("button");
       cancel.textContent = "Cancel";
@@ -2306,6 +2414,7 @@ function initUI() {
     if (isDirty() && !(await confirmModal("Clear the graph?", "Your unsaved changes will be lost.", "Clear"))) return;
     graph.clear();
     outputPreviews.clear();
+    comparePreviews.clear();
     pushHistory();
     markSaved("");
     updateEmptyState();
@@ -2357,6 +2466,10 @@ function initUI() {
   document.getElementById("system-status").onclick = openSystemPanel;
   document.getElementById("system-close").onclick = () => closeOverlay("system-overlay");
   document.getElementById("download-form").onsubmit = startDownload;
+  document.getElementById("btn-copy-mcp").onclick = () =>
+    mcpConfig && copyText(JSON.stringify(mcpConfig.json, null, 2), "MCP configuration");
+  document.getElementById("btn-copy-mcp-cli").onclick = () =>
+    mcpConfig && copyText(mcpConfig.claude_code, "Claude Code command");
   document.getElementById("btn-free-memory").onclick = async () => {
     const res = await fetch("/api/free", { method: "POST" });
     if (res.ok) showToast(`Unloaded ${(await res.json()).unloaded} model(s).`);

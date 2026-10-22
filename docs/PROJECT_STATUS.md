@@ -53,6 +53,13 @@ files directly.
 - **Models** (`models/checkpoints/`, `models/loras/`) — under the data
   folder, unless `PIXELFLOW_MODELS_DIR` or `{"models_dir": "..."}` in
   `settings.json` points elsewhere (e.g. a big, non-synced drive).
+- **ComfyUI's library** (B25, `backend/model_roots.py`) — the folders a ComfyUI
+  `extra_model_paths.yaml` assigns to each kind (Comfy Desktop's are found under
+  `%LOCALAPPDATA%\Comfy-Desktop\ComfyUI-Installs\*\ComfyUI\`;
+  `comfyui_model_paths` / `PIXELFLOW_COMFYUI_MODEL_PATHS` override or turn it
+  off) come after PixelFlow's own folder in `models.list_models()` /
+  `local_model_path()`, `controlnet` and `upscale` lookups; rescanned every
+  30 s. The tests and the e2e server turn it off.
 
 ## Architecture
 

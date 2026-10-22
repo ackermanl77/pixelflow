@@ -390,11 +390,22 @@ async def get_temp(filename: str):
     return FileResponse(_generated_file("temp", filename), headers={"Cache-Control": "no-store"})
 
 
+def _unlink(path: Path) -> None:
+    """Delete `path`; a file another program holds open becomes a 409 that
+    names that program (R8, Windows Restart Manager)."""
+    try:
+        path.unlink()
+    except PermissionError as error:
+        from .diagnostics import explain_delete_failure
+
+        raise HTTPException(409, explain_delete_failure(path, error)) from error
+
+
 @app.delete("/api/outputs/{filename:path}")
 async def delete_output(filename: str, type: str = Query("output")):  # noqa: A002 - API field name
     """Delete a generated image (gallery "Delete")."""
     path = _generated_file(type, filename)
-    path.unlink()
+    _unlink(path)
     return {"deleted": filename}
 
 
@@ -546,6 +557,16 @@ def get_system():
     return _system_info()
 
 
+@app.get("/api/mcp")
+def get_mcp_config():
+    """F27: how to connect an assistant (Claude Desktop, Claude Code...) to
+    PixelFlow's MCP server -- the command, a copyable config block and the
+    Claude Code command line."""
+    from . import mcp_server
+
+    return mcp_server.client_config()
+
+
 @app.post("/api/free")
 def free_models():
     """Unload every cached pipeline and node output and give the memory back
@@ -654,7 +675,7 @@ async def delete_workflow(name: str):
     path = _workflow_path(name)
     if not path.is_file():
         raise HTTPException(404, "Workflow not found")
-    path.unlink()
+    _unlink(path)
     return {"deleted": name}
 
 

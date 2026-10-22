@@ -17,7 +17,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List
 
-from .. import paths
+from .. import model_roots, paths
 from .base import NodeBase, as_image_list, register_node
 
 logger = logging.getLogger(__name__)
@@ -31,9 +31,13 @@ def controlnet_dir() -> Path:
 
 
 def list_controlnets() -> List[str]:
-    """Names under models/controlnet/: .safetensors files and diffusers
-    folders (a config.json next to the weights), '/'-separated."""
-    folder = controlnet_dir()
+    """Names under models/controlnet/ (and the ComfyUI library's controlnet
+    folders, B25): .safetensors files and diffusers folders (a config.json
+    next to the weights), '/'-separated."""
+    return model_roots.merge_names(_list_folder(folder) for folder in [controlnet_dir(), *model_roots.extra_roots("controlnet")])
+
+
+def _list_folder(folder: Path) -> List[str]:
     if not folder.is_dir():
         return []
     found = []
@@ -51,11 +55,14 @@ def list_controlnets() -> List[str]:
 
 
 def _local_path(name: str) -> Path | None:
-    try:
-        path = paths.safe_path(controlnet_dir(), name)
-    except paths.PathTraversalError:
-        return None
-    return path if path.exists() else None
+    for folder in [controlnet_dir(), *model_roots.extra_roots("controlnet")]:
+        try:
+            path = paths.safe_path(folder, name)
+        except paths.PathTraversalError:
+            return None
+        if path.exists():
+            return path
+    return None
 
 
 _cache: "OrderedDict[str, object]" = OrderedDict()

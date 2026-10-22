@@ -157,6 +157,8 @@
     <div class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="template-title">
       <h3 id="template-title">Templates</h3>
       <div id="template-list" class="template-list"></div>
+      <label class="template-insert"><input type="checkbox" id="template-insert">
+        Add to the current graph (as a reusable block) instead of replacing it</label>
       <div class="modal-actions">
         <button id="template-close">Close</button>
       </div>
@@ -181,12 +183,25 @@
           <option value="embeddings">embeddings</option>
           <option value="controlnet">controlnet</option>
           <option value="upscale_models">upscale_models</option>
+          <option value="diffusion_models">diffusion_models</option>
+          <option value="text_encoders">text_encoders</option>
+          <option value="vae">vae</option>
         </select>
         <button type="submit">Download</button>
       </form>
       <p class="hint">The file is checked against the SHA-256 the site lists before it appears in models/.
         Reload the page afterwards to see it in the model lists.</p>
       <ul id="download-list" class="system-models"></ul>
+      <h4>Connect an assistant (MCP)</h4>
+      <p class="hint">Claude Desktop or another MCP client can list and run your saved workflows while PixelFlow
+        is open. Add this to the client's MCP configuration (Claude Desktop: Settings &gt; Developer &gt; Edit Config),
+        then restart the client. Nothing leaves this computer.</p>
+      <pre id="mcp-config" class="mcp-config" tabindex="0" aria-label="MCP configuration"></pre>
+      <p class="hint">Claude Code: <code id="mcp-claude-code"></code></p>
+      <div class="modal-actions">
+        <button id="btn-copy-mcp" type="button">Copy configuration</button>
+        <button id="btn-copy-mcp-cli" type="button">Copy Claude Code command</button>
+      </div>
       <div class="modal-actions">
         <button id="btn-open-logs" title="Open the folder with pixelflow.log">Open log folder</button>
         <button id="btn-free-memory" title="Unload all models and free GPU memory">Free memory</button>

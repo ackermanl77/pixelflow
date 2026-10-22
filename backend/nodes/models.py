@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from . import runtime
-from .. import config, paths
+from .. import config, model_roots, paths
 from ..paths import PathTraversalError, safe_path
 
 logger = logging.getLogger(__name__)
@@ -43,10 +43,15 @@ CHECKPOINT_EXTENSIONS = (".safetensors", ".ckpt")
 LORA_EXTENSIONS = (".safetensors",)
 # Textual-inversion embeddings (B22), used in prompts as embedding:name (nodes/embeddings.py).
 EMBEDDING_EXTENSIONS = (".safetensors", ".pt", ".bin")
+# Split-file components (B26): ComfyUI's diffusion_models / text_encoders / vae single files.
+COMPONENT_EXTENSIONS = (".safetensors", ".sft")
 MODEL_KINDS = {
     "checkpoints": CHECKPOINT_EXTENSIONS,
     "loras": LORA_EXTENSIONS,
     "embeddings": EMBEDDING_EXTENSIONS,
+    "diffusion_models": COMPONENT_EXTENSIONS,
+    "text_encoders": COMPONENT_EXTENSIONS,
+    "vae": COMPONENT_EXTENSIONS,
 }
 
 DTYPE_CHOICES = ["auto", "fp16", "bf16", "fp32"]
@@ -83,7 +88,9 @@ def _checkpoint_dir() -> Path:
 
 
 def _model_dir(kind: str) -> Path:
-    return {"checkpoints": paths.CHECKPOINT_DIR, "loras": paths.LORA_DIR, "embeddings": paths.EMBEDDING_DIR}[kind]
+    """PixelFlow's own folder for `kind` (downloads land here); model_roots.model_dirs()
+    adds the ComfyUI library's folders after it (B25)."""
+    return model_roots.model_dirs(kind)[0]
 
 
 def list_local_models(folder: Path, extensions: Iterable[str], diffusers_dirs: bool) -> List[str]:
@@ -145,7 +152,9 @@ def list_models(kind: str) -> List[str]:
     """What GET /api/models/{kind} returns, and the checkpoint/LoRA combos."""
     if kind not in MODEL_KINDS:
         raise KeyError(kind)
-    local = list_local_models(_model_dir(kind), MODEL_KINDS[kind], diffusers_dirs=kind == "checkpoints")
+    local = model_roots.merge_names(
+        list_local_models(folder, MODEL_KINDS[kind], diffusers_dirs=kind == "checkpoints") for folder in model_roots.model_dirs(kind)
+    )
     if kind != "checkpoints":
         return local
     names = local + [r for r in list_cached_hub_pipelines() if r not in local]
@@ -155,16 +164,11 @@ def list_models(kind: str) -> List[str]:
 
 
 def local_model_path(kind: str, name: str) -> Optional[Path]:
-    """`name` resolved under models/<kind>/, or None when it isn't a local
-    model there (e.g. a hub repo id). safe_path() stops '..' or absolute
-    names from reading outside the folder."""
-    if not name:
-        return None
-    try:
-        candidate = safe_path(_model_dir(kind), name)
-    except PathTraversalError:
-        return None
-    return candidate if candidate.exists() else None
+    """`name` resolved under models/<kind>/ (or a ComfyUI library folder of
+    that kind, B25), or None when it isn't a local model there (e.g. a hub
+    repo id). safe_path() stops '..' or absolute names from reading outside
+    the folders."""
+    return model_roots.find(kind, name)
 
 
 # ------------------------------------------------------------- architecture

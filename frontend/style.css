@@ -440,6 +440,11 @@ button.danger:hover { background: #4a2222; }
 .system-info dt { color: var(--text-dim); }
 .system-info dd { margin: 0; overflow-wrap: anywhere; }
 .system-models { margin: 0; padding-left: 18px; }
+.mcp-config {
+  margin: 0; padding: 8px 10px; max-height: 160px; overflow: auto;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+  font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere;
+}
 .download-form { display: flex; gap: 8px; align-items: center; }
 .download-form input { flex: 1; }
 .download-form select {
@@ -472,6 +477,7 @@ kbd { background: #2a2b33; border: 1px solid var(--border); border-radius: 3px; 
 
 /* Templates (F18) */
 .template-list { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow-y: auto; }
+.template-insert { display: flex; gap: 6px; align-items: center; margin-top: 8px; color: var(--text-dim); }
 .template-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 8px 10px; }
 .template-item span { color: var(--text-dim); font-size: 12px; }
 

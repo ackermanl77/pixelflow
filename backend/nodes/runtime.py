@@ -17,8 +17,17 @@ _warm_started = False
 
 
 def torch():
-    import torch as _torch
+    try:
+        import torch as _torch
+    except (ImportError, OSError) as error:
+        # R8: a fresh Windows without the VC++ runtime fails here (often as a
+        # DLL-load error, or a crash on the next attempt): say which DLL.
+        from ..diagnostics import vc_runtime_report
 
+        report = vc_runtime_report()
+        if report:
+            raise ImportError(f"torch could not be loaded ({error}): {report}") from error
+        raise
     return _torch
 
 

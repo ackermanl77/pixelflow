@@ -38,11 +38,38 @@ from . import paths
 from .config import APP_ID, HOST, app_version, port
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+MCP_SERVER_NAME = "pixelflow"
 SAVED_PROMPT_KEY = "pixelflow_prompt"
 SERVER_INFO_FILE = "server.json"
 DEFAULT_TIMEOUT_S = 600
 POLL_INTERVAL_S = 0.5
 TERMINAL_STATUSES = ("completed", "error", "interrupted", "cancelled")
+
+def client_config(frozen: Optional[bool] = None, executable: Optional[str] = None) -> Dict[str, Any]:
+    """How an MCP client starts this server (F27, the System panel's "Connect an
+    assistant"): the command and arguments, the JSON block for Claude Desktop's
+    claude_desktop_config.json (and other clients using the same "mcpServers"
+    shape), and the one-line `claude mcp add` for Claude Code."""
+    frozen = getattr(sys, "frozen", False) if frozen is None else frozen
+    executable = executable or sys.executable
+    if frozen:
+        command, args, env = executable, ["--mcp"], {}
+    else:
+        command, args, env = executable, ["-m", "backend.mcp_server"], {"PYTHONPATH": str(paths.BUNDLE_DIR)}
+    entry: Dict[str, Any] = {"command": command, "args": args}
+    if env:
+        entry["env"] = env
+    quoted = " ".join(f'"{part}"' if " " in part else part for part in [command, *args])
+    env_flags = "".join(f" -e {key}={value}" for key, value in env.items())
+    return {
+        "name": MCP_SERVER_NAME,
+        "command": command,
+        "args": args,
+        "env": env,
+        "json": {"mcpServers": {MCP_SERVER_NAME: entry}},
+        "claude_code": f"claude mcp add {MCP_SERVER_NAME}{env_flags} -- {quoted}",
+    }
+
 
 TOOLS = [
     {

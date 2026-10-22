@@ -1,0 +1,14 @@
+{
+  "nodes": [
+    {"id": "image", "type": "LoadImage", "pos": [50, 120]},
+    {"id": "cut", "type": "RemoveBackground", "pos": [380, 120], "values": {"background": "transparent", "feather": 1.0}},
+    {"id": "save", "type": "SaveImage", "pos": [700, 60]},
+    {"id": "compare", "type": "ImageCompare", "pos": [700, 380]}
+  ],
+  "links": [
+    ["image", 0, "cut", "image"],
+    ["cut", 0, "save", "image"],
+    ["image", 0, "compare", "image_a"],
+    ["cut", 0, "compare", "image_b"]
+  ]
+}
