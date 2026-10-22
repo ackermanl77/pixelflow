@@ -12,6 +12,34 @@
   // any other string type (IMAGE, MODEL, CONDITIONING, MASK, ...) is a socket.
   const PRIMITIVE_TYPES = new Set(["INT", "FLOAT", "STRING", "BOOLEAN"]);
 
+  // Node widths that keep a widget's label and value apart (UI2). LiteGraph draws a number/combo
+  // label at x=35 and its value right-aligned 50 px from the edge; a text/toggle label at x=30
+  // and its value 30/40 px from the edge -- in a narrow node the two overprint each other.
+  const WIDGET_MAX_WIDTH = 480;
+  const WIDGET_TEXT_PADDING = { number: 95, combo: 95, text: 70, string: 70, toggle: 80 };
+
+  /** The text LiteGraph draws as a widget's value. */
+  function widgetDisplayValue(widget) {
+    const options = widget.options || {};
+    if (widget.type === "number") return Number(widget.value).toFixed(options.precision !== undefined ? options.precision : 3);
+    if (widget.type === "toggle") return widget.value ? options.on || "true" : options.off || "false";
+    const text = String(widget.value === undefined || widget.value === null ? "" : widget.value);
+    return widget.type === "text" || widget.type === "string" ? text.substr(0, 30) : text;
+  }
+
+  /** The node width at which no widget's label touches its value, capped at WIDGET_MAX_WIDTH.
+   *  `measure(text)` returns the drawn width of `text` in the widget font. */
+  function widgetFitWidth(widgets, measure) {
+    let need = 0;
+    for (const widget of widgets || []) {
+      const padding = WIDGET_TEXT_PADDING[widget.type];
+      if (padding === undefined) continue;
+      const label = String(widget.label || widget.name || "");
+      need = Math.max(need, measure(label) + measure(widgetDisplayValue(widget)) + padding);
+    }
+    return Math.min(Math.ceil(need), WIDGET_MAX_WIDTH);
+  }
+
   /** How an INPUT_TYPES spec ([type, config]) is rendered on a node. */
   function widgetKind(spec) {
     const type = spec[0];
@@ -652,5 +680,8 @@
     XY_MAX_CELLS,
     parseAxisValues,
     firstImage,
+    widgetDisplayValue,
+    widgetFitWidth,
+    WIDGET_MAX_WIDTH,
   };
 });

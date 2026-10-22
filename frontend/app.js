@@ -30,6 +30,16 @@ let currentWorkflowName = "";
 
 // ---- Widgets ----
 
+const widgetTextMeasure = document.createElement("canvas").getContext("2d");
+
+/** Widen a node so no widget's label overprints its value (UI2); never narrows it. */
+function fitNodeWidth(node) {
+  if (!node.widgets || !node.widgets.length) return;
+  widgetTextMeasure.font = "normal " + LiteGraph.NODE_SUBTEXT_SIZE + "px Arial"; // LiteGraph's widget font
+  const need = Logic.widgetFitWidth(node.widgets, (text) => widgetTextMeasure.measureText(text).width);
+  if (need > node.size[0]) node.setSize([need, node.size[1]]);
+}
+
 function addPropertyWidget(node, name, spec) {
   const type = spec[0];
   const config = spec[1] || {};
@@ -345,7 +355,11 @@ function makeNodeClass(nodeName, def) {
 
     this.size = this.computeSize();
     if (this.uploadComboName || def.output_node) this.size[1] += 140;
+    fitNodeWidth(this);
   }
+  NodeCtor.prototype.onWidgetChanged = function () {
+    fitNodeWidth(this);
+  };
   NodeCtor.title = def.display_name;
   NodeCtor.desc = def.description || "";
   NodeCtor.prototype.onDrawForeground = function (ctx) {
@@ -375,6 +389,7 @@ function makeNodeClass(nodeName, def) {
     // A loaded/restored graph: its converted widgets are inputs again (their
     // sockets came back with the saved inputs; the widgets came from the constructor).
     for (const name of this.properties[CONVERTED_PROPERTY] || []) hideWidget(this, name);
+    fitNodeWidth(this);
   };
   return NodeCtor;
 }
@@ -1357,6 +1372,7 @@ function syncWidgetsFromProperties() {
         widget.value = node.properties[SEED_CONTROL_PROPERTY];
       }
     }
+    fitNodeWidth(node); // the restored values can be longer than the constructor's defaults
   }
   canvas.setDirty(true, true);
 }
@@ -1687,6 +1703,7 @@ function setNodeValue(node, name, value) {
   const widgetName = name === SEED_CONTROL_PROPERTY ? "control after generate" : name;
   const widget = (node.widgets || []).find((w) => w.name === widgetName);
   if (widget) widget.value = value;
+  fitNodeWidth(node);
 }
 
 // ---- Mask editor (F18): paint a mask over a Load Image's picture ----
@@ -2579,6 +2596,7 @@ async function main() {
   graph = new LGraph();
   const el = document.getElementById("graph-canvas");
   canvas = new LGraphCanvas(el, graph);
+  canvas.show_info = false; // LiteGraph's debug corner (T/I/N/V/FPS) is for its developers (UI1)
   window.addEventListener("resize", resizeCanvas);
   new ResizeObserver(resizeCanvas).observe(document.getElementById("canvas-wrap"));
   resizeCanvas();

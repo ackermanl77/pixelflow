@@ -94,6 +94,7 @@ exe = EXE(
     console=False,
     version=VERSION_PATH,
     manifest=MANIFEST_PATH,
+    icon="assets/icon.ico",  # rendered from assets/icon.svg
 )
 coll = COLLECT(
     exe,

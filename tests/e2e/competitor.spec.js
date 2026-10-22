@@ -2,6 +2,8 @@
 // split follows the mouse (F28), a template is inserted beside the current graph
 // as a reusable block (F28), and the System panel shows the MCP configuration
 // to copy into an assistant (F27).
+// The page's own globals, used inside page.evaluate() callbacks (they run in the browser).
+/* global comparePreviews */
 const { test, expect } = require("@playwright/test");
 
 test("Image Compare shows A and B with a split that follows the mouse", async ({ page }) => {

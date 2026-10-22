@@ -199,3 +199,19 @@ test("download list lines (F23)", () => {
   assert.equal(L.describeDownload({ ...base, status: "error", error: "SHA-256 doesn't match" }),
     "style.safetensors: failed — SHA-256 doesn't match");
 });
+
+test("a node widget's label and value never overlap: the fit width covers both (UI2)", () => {
+  const measure = (text) => text.length * 7; // 7 px per character
+  const widgets = [
+    { type: "combo", name: "ckpt_name", value: "stabilityai/sd-turbo" },
+    { type: "number", name: "steps", value: 4, options: { precision: 0 } },
+    { type: "button", name: "Upload" },
+  ];
+  // combo: (9 + 20) * 7 + 95 = 298
+  assert.equal(L.widgetFitWidth(widgets, measure), 298);
+  assert.equal(L.widgetDisplayValue({ type: "number", value: 0.5, options: {} }), "0.500");
+  assert.equal(L.widgetDisplayValue({ type: "toggle", value: true, options: { on: "yes" } }), "yes");
+  assert.equal(L.widgetDisplayValue({ type: "text", value: "x".repeat(40) }).length, 30);
+  // A very long value is capped instead of making the node enormous.
+  assert.equal(L.widgetFitWidth([{ type: "combo", name: "m", value: "y".repeat(200) }], measure), L.WIDGET_MAX_WIDTH);
+});

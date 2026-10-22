@@ -3,13 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <title>PixelFlow</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48" />
   <link rel="stylesheet" href="vendor/litegraph.css" />
   <!-- No manual version query strings: the server sends Cache-Control: no-cache for these files. -->
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div id="topbar">
-    <div class="brand">PixelFlow</div>
+    <div class="brand"><img class="brand-icon" src="favicon.svg" alt="" />PixelFlow</div>
     <span id="conn-status" data-state="reconnecting" role="status" title="Connecting to the server…" aria-label="Connecting to the server…"></span>
     <div class="group" role="group" aria-label="Run">
       <button id="btn-queue" class="primary" title="Queue Prompt (Ctrl+Enter; Ctrl+Shift+Enter queues it first)">Queue Prompt</button>
