@@ -117,14 +117,24 @@ push or a real release at all, which just builds and uploads the artifact.
 - **image**: Empty Image, Resize, Blur, Brightness/Contrast, Hue/Saturation,
   Blend, Text Overlay, Pad Image for Outpainting (extends the canvas and masks
   the new area for KSampler (Inpaint); an "Outpaint" template sets it up) —
-  real, CPU-only, Pillow-based operations
+  real, CPU-only, Pillow-based operations; Remove Background (a Mask2Former
+  segmentation model: transparent or a flat colour, plus the mask)
 - **output**: Preview Image (throwaway, `temp\`), Save Image (numbered
-  `prefix_00001_.png`, subfolders, `%date%`/`%time%`/`%seed%`/`%model%` tokens)
+  `prefix_00001_.png`, subfolders, `%date%`/`%time%`/`%seed%`/`%model%` tokens),
+  Image Compare (an A/B split slider inside the node)
 - **utility**: Reroute and Primitive (drives any widget converted to an
   input); plus groups, a mask editor, workflow templates and an X/Y plot in
   the UI -- see `docs/USER_GUIDE.md`
 
-Adding a new node is a single Python class — see `docs/NODE_AUTHORING.md`.
+Also: `{a|b}` and `__file__` wildcards and `embedding:name` textual
+inversions in prompts; model downloads from Hugging Face/Civitai links
+(verified by SHA-256, resumable); using an existing ComfyUI model library
+(Comfy Desktop's `extra_model_paths.yaml`) without copying files; an MCP
+server (`PixelFlow.exe --mcp`) so an AI assistant can run workflows, with the
+copyable client configuration under System → "Connect an assistant".
+
+Adding a new node is a single Python class — see `docs/NODE_AUTHORING.md`;
+custom node plugins load from `custom_nodes/`.
 
 ## Tests
 

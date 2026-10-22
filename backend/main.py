@@ -487,9 +487,10 @@ def cancel_download(job_id: str):
 
 @app.get("/api/models/{kind}")
 def get_models(kind: str):
-    """Installed models of a kind: checkpoints (files and diffusers folders
-    in models/checkpoints/, plus diffusers pipelines in the Hugging Face
-    cache) or loras (models/loras/*.safetensors)."""
+    """Installed models of a kind (models.MODEL_KINDS): e.g. checkpoints
+    (files and diffusers folders in models/checkpoints/, plus diffusers
+    pipelines in the Hugging Face cache), loras, embeddings, and the files a
+    ComfyUI library adds (backend/model_roots.py)."""
     try:
         return models.list_models(kind)
     except KeyError:

@@ -242,7 +242,7 @@ npm ci
 npm run lint          # ESLint over frontend/*.js and the JS tests
 npm test              # node:test unit tests (tests/js)
 npm run e2e:install   # once: Playwright's Chromium, into node_modules/
-npm run e2e           # Playwright smoke test (tests/e2e/smoke.spec.js)
+npm run e2e           # Playwright tests (tests/e2e/*.spec.js)
 ```
 
 The smoke test runs the backend in **test mode** (`PIXELFLOW_TEST_MODE=1`,

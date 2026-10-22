@@ -50,7 +50,9 @@ files directly.
   `%LOCALAPPDATA%\PixelFlow`. So an install under `C:\Program Files` still
   starts. Nothing is created at import time; `ensure_data_dirs()` runs at
   startup and only logs failures.
-- **Models** (`models/checkpoints/`, `models/loras/`) — under the data
+- **Models** (`models/checkpoints/`, `models/loras/`, `embeddings/`,
+  `controlnet/`, `upscale_models/`, and the split-file kinds
+  `diffusion_models/`, `text_encoders/`, `vae/`) — under the data
   folder, unless `PIXELFLOW_MODELS_DIR` or `{"models_dir": "..."}` in
   `settings.json` points elsewhere (e.g. a big, non-synced drive).
 - **ComfyUI's library** (B25, `backend/model_roots.py`) — the folders a ComfyUI
@@ -125,7 +127,9 @@ files directly.
     `GET /api/node_aliases`, `GET /api/system` (versions, device, VRAM,
     loaded models, data/models/log folders), `POST /api/free` (unload every
     model and the output cache), `POST /api/logs/open` (open the log folder),
-    `GET /api/models/{checkpoints|loras|controlnet|upscale_models}`.
+    `GET /api/models/{kind}` (any `models.MODEL_KINDS` kind, 404 otherwise),
+    `GET /api/mcp` (F27: the MCP client configuration for this install, shown
+    by the System panel's "Connect an assistant" with copy buttons).
   - `POST /api/queue` (`{"prompt", "extra_data", "front"}`; 400 with
     `{"detail": {"message", "node_id", "class_type", "input"}}`),
     `GET /api/queue`, `DELETE /api/queue` (cancel all pending),
@@ -136,7 +140,8 @@ files directly.
   - `POST /api/upload`, `GET /api/uploads`, `GET /uploads/{name}`,
     `GET /outputs/{path}`, `GET /temp/{name}`, `DELETE /api/outputs/{path}?type=`,
     `POST /api/outputs/to-upload`, `POST /api/contact_sheet` (the X/Y plot's
-    labelled grid of finished images).
+    labelled grid of finished images). A delete that fails because another
+    program holds the file open is a 409 naming that program (R8).
   - `GET /api/workflows` (`[{name, modified, size}]`),
     `GET|POST|DELETE /api/workflows/{name}` (`?overwrite=false` → 409 when it
     exists), `POST /api/workflows/{name}/rename`. Names are validated (1-100
@@ -196,7 +201,18 @@ files directly.
 - **`backend/model_downloads.py`** (F23) — Hugging Face file / Civitai model
   links resolved to one file, its folder and its published SHA-256,
   downloaded as `<name>.part` and renamed only when verified; background jobs
-  behind `POST|GET /api/downloads` and `DELETE /api/downloads/{id}`.
+  behind `POST|GET /api/downloads` and `DELETE /api/downloads/{id}`. An
+  interrupted download resumes (F26): a `<name>.part.dl-meta` sidecar records
+  the URL, size, SHA-256 and ETag, and the next attempt sends Range +
+  If-Range (a server that answers 200 restarts it). A gated Hugging Face model
+  fails with a `help_url` (its licence page), shown as "Open the model page".
+- **`backend/model_roots.py`** (B25) — ComfyUI's model folders, see "Where
+  data lives".
+- **`backend/diagnostics.py`** (R8) — Windows-first crash and file-lock
+  diagnostics: when torch fails to import, `vc_runtime_report()` names the
+  missing Visual C++ 2015-2022 runtime DLLs (shown in the error and the
+  self-test); when a delete fails, `locking_processes()` asks the Restart
+  Manager which programs hold the file. No-ops elsewhere.
 - **`frontend/vendor/`** — litegraph.js and its CSS, vendored locally.
 - **`desktop.py`** — see Entry points.
 
@@ -229,9 +245,18 @@ files directly.
   OpenPose's 18-point body in controlnet_aux's colours; the ViTPose crop and
   heatmap decoding are done with PIL/torch because transformers' processor
   needs scipy -- within 3.7 px of transformers' own on a 409 px person); Upscale Image (model) runs a spandrel model tiled
+  Remove Background (`backend/nodes/background.py`, F28): the subject as every
+  "thing" segment of a COCO panoptic Mask2Former (~190 MB, downloaded on first
+  use), with a transparent/white/black/green background and feathered edge,
+  plus its MASK
 - **utility** (frontend only): Reroute, Primitive
 - **output**: Preview Image (to `temp/`), Save Image (`prefix_00001_.png`,
-  subfolders, `%date%`/`%time%`/`%seed%`/`%model%`)
+  subfolders, `%date%`/`%time%`/`%seed%`/`%model%`), Image Compare (F28: two
+  images in the node with a split that follows the mouse; files to `temp/`)
+
+Templates (`frontend/templates/*.json`, incl. "Remove background" and "Compare
+an upscale") replace the graph, or with "Add to the current graph" are added
+beside it as a group.
 
 Generation details (`backend/nodes/generation.py`):
 
@@ -266,14 +291,14 @@ Generation details (`backend/nodes/generation.py`):
 
 ## Verification
 
-Run on 2026-10-07 in the dev `.venv` (Python 3.14, CUDA torch, RTX 5080):
+Run in the dev `.venv` (Python 3.14, CUDA torch, RTX 5080):
 
 | Command | Result |
 |---|---|
-| `.\.venv\Scripts\python.exe -m pytest -q` | 457 passed, 2 skipped (the opt-in GPU tests) — 2026-10-20 |
-| `npm test` | 29/29 node:test unit tests pass — 2026-10-20 |
+| `.\.venv\Scripts\python.exe -m pytest -q` | 473 passed, 2 skipped (the opt-in GPU tests) — 2026-10-22 |
+| `npm test` | 29/29 node:test unit tests pass — 2026-10-22 |
 | `npm run lint` | ESLint clean |
-| `npm run e2e` | 8 Playwright tests pass (the smoke test plus templates, groups, side panels, reroute/primitive, mask editor, a real 2×2 X/Y plot and two windows' queues) |
+| `npm run e2e` | 11 Playwright tests pass (the smoke test plus templates, groups, side panels, reroute/primitive, mask editor, a real 2×2 X/Y plot, two windows' queues, and the F27/F28 checks: the "Connect an assistant" panel, Image Compare's split and adding a template to the current graph) — 2026-10-22 |
 
 ControlNet was tested end to end with the tiny test checkpoint and a ControlNet
 built from its UNet (no real SD ControlNet was downloaded). The real
@@ -313,10 +338,11 @@ and the Playwright smoke test. `release.yml` calls `ci.yml` first.
   (OpenPose) runs the real RT-DETR + ViTPose models (checked on a portrait;
   opt-in test `PIXELFLOW_POSE_SMOKE=<photo>`) but draws the body only -- no
   hand or face keypoints -- and hasn't driven a real OpenPose ControlNet yet.
-- **Frontend tests**: unit tests of `logic.js`, ESLint, and one Playwright
-  smoke test (page load, node palette, adding and wiring nodes with the
-  mouse, running a torch-free graph, saving and loading a workflow) against
-  the backend in test mode. Generation itself, the image viewer, uploads and
+- **Frontend tests**: unit tests of `logic.js`, ESLint, and 11 Playwright
+  tests (`tests/e2e/smoke.spec.js`: page load, node palette, adding and wiring
+  nodes with the mouse, running a torch-free graph, saving and loading a
+  workflow; `features.spec.js` and `competitor.spec.js`: the features listed
+  under Verification) against the backend in test mode. Generation itself, the image viewer, uploads and
   drag-and-drop of files still need a manual pass in a real window.
 - **`torch.compile` is opt-in and not bundled** (`{"torch_compile": true |
   "max-autotune"}` in settings.json or `PIXELFLOW_TORCH_COMPILE`; needs
