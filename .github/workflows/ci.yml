@@ -39,12 +39,15 @@ jobs:
       # (spandrel needs it) comes from the same index: Linux PyPI's torchvision is built for the
       # CUDA torch and fails to import next to the CPU one ("operator torchvision::nms does not exist").
       - name: Install dependencies
+        shell: bash  # also on Windows (Git Bash): the grep below
         run: |
           python -m pip install --upgrade pip
-          # -c requirements-lock.txt: the versions the app was tested and ships with (an unpinned
-          # transformers once broke the Z-Image text encoder); 2.14.1+cpu satisfies torch==2.14.1.
-          python -m pip install -c requirements-lock.txt torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          python -m pip install -r requirements.txt -c requirements-lock.txt pytest httpx
+          # The lock's versions: what the app was tested and ships with (an unpinned transformers once
+          # broke the Z-Image text encoder); 2.14.1+cpu satisfies torch==2.14.1. setuptools is left
+          # out: a build tool, and the locked one (made on Python 3.14) has no build for 3.12.
+          grep -v '^setuptools==' requirements-lock.txt > ci-constraints.txt
+          python -m pip install -c ci-constraints.txt torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements.txt -c ci-constraints.txt pytest httpx
 
       # Cache the tiny test checkpoint (hf-internal-testing/tiny-stable-diffusion-torch) the
       # real-pipeline tests download.
@@ -82,7 +85,9 @@ jobs:
           npm ci
           # Only the web dependencies (tests/test_test_mode.py checks the server needs no more),
           # at the lock file's versions so this list can't drift from requirements.txt again.
-          python -m pip install -c requirements-lock.txt fastapi "uvicorn[standard]" pillow python-multipart requests
+          # (Checked with only these installed: backend.main imports and registers every node.)
+          grep -v '^setuptools==' requirements-lock.txt > ci-constraints.txt
+          python -m pip install -c ci-constraints.txt fastapi "uvicorn[standard]" pillow python-multipart requests numpy
           npx playwright install --with-deps chromium
 
       - name: ESLint
