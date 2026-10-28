@@ -29,6 +29,8 @@ PixelFlow-*-Windows.7z.[0-9][0-9][0-9]
 # Fixed-name mirror of the current PixelFlow-<version>-Windows/ build output (see
 # scripts/build_release.ps1) -- always the latest build, so PixelFlow.exe has one stable place.
 /release/
+# build_release.ps1 -Installer: PixelFlow-<version>-Setup.exe and its -N.bin slices.
+/installer-output/
 # Downloaded/extracted third-party runtime bundled into releases (see scripts/build_release.ps1).
 # Anchored to the root only -- frontend/vendor/ holds vendored litegraph.js source, not this cache.
 /vendor/

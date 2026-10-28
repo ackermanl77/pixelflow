@@ -93,9 +93,10 @@ jobs:
         run: |
           $signArgs = @{}
           if ($env:THUMBPRINT) { $signArgs = @{ Sign = $true; CertificateThumbprint = $env:THUMBPRINT } }
+          # -Installer: Inno Setup 6 comes preinstalled on windows-latest.
           .\scripts\build_release.ps1 -Version "${{ steps.version.outputs.value }}" `
             -Python (Get-Command python).Source `
-            -TorchIndexUrl "https://download.pytorch.org/whl/cu130" @signArgs
+            -TorchIndexUrl "https://download.pytorch.org/whl/cu130" -Installer @signArgs
 
       # Belt and braces: the bundled torch in the finished release\ folder must be a CUDA build.
       - name: Verify bundled torch is a CUDA build
@@ -115,8 +116,10 @@ jobs:
           name: PixelFlow-${{ steps.version.outputs.value }}-Windows
           # A single .7z, or .7z.001, .002, ... split volumes when the CUDA build is over GitHub's
           # 2 GiB per-asset limit (see build_release.ps1 -MaxAssetBytes), plus the .sha256 file.
+          # The installer is PixelFlow-<version>-Setup.exe + -N.bin slices (each under 2 GiB) + .sha256.
           path: |
             PixelFlow-*-Windows.7z*
+            installer-output/PixelFlow-*-Setup*
           if-no-files-found: error
 
       - name: Publish GitHub Release
@@ -128,6 +131,9 @@ jobs:
           # PowerShell doesn't expand wildcards for native commands -- list the files explicitly.
           $assets = (Get-ChildItem -Path "PixelFlow-*-Windows.7z*").FullName
           if (-not $assets) { throw "no release archive found" }
+          $setup = (Get-ChildItem -Path "installer-output\PixelFlow-*-Setup*").FullName
+          if (-not $setup) { throw "no installer found" }
+          $assets += $setup
           gh release create "${{ github.ref_name }}" @assets `
             --title "PixelFlow ${{ github.ref_name }}" `
             --generate-notes

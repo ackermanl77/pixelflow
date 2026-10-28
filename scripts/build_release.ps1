@@ -25,6 +25,10 @@ param(
     # Skip the 7z archive. A CUDA build bundles several GB of libraries, and -mx=9 LZMA over that
     # takes a long time -- skip it when only the unpacked release\ folder is needed.
     [switch]$SkipArchive,
+    # Also build the per-user Inno Setup installer (installer\PixelFlow.iss) from the finished
+    # release\ folder into installer-output\: PixelFlow-<version>-Setup.exe plus -1.bin, -2.bin...
+    # slices below GitHub's 2 GiB asset limit. Needs ISCC.exe (Inno Setup 6).
+    [switch]$Installer,
     # Keep PyInstaller's build-release\ and dist-release\ folders after a successful build instead of
     # deleting them. build-release\ is PyInstaller's analysis cache, so keeping it makes the next
     # rebuild faster at the cost of a few hundred MB; dist-release\ is empty either way, since its
@@ -305,6 +309,31 @@ json.dump({
         Write-Warning "7z was not found. The unpacked build is ready at $ReleaseFolder."
     }
     Write-Host "Release folder: $ReleaseFolder"
+
+    if ($Installer) {
+        $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+        $isccPath = if ($iscc) { $iscc.Source } else { Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe" }
+        # Inno Setup installed "for me only" lands under %LOCALAPPDATA%\Programs instead.
+        if (-not (Test-Path $isccPath) -and $env:LOCALAPPDATA) { $isccPath = Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe" }
+        if (-not (Test-Path $isccPath)) { throw "ISCC.exe (Inno Setup 6) not found -- needed for -Installer." }
+        $InstallerOutput = Join-Path $ProjectRoot "installer-output"
+        # Slices of an earlier build would sit next to this one's and look like part of it.
+        foreach ($stale in @(Get-ChildItem -Path (Join-Path $InstallerOutput "PixelFlow-*-Setup*") -ErrorAction SilentlyContinue)) {
+            Remove-Item $stale.FullName -Force
+        }
+        $isccArgs = @("/Q", "/DMyAppVersion=$Version")
+        if ($Sign) {
+            # Inno Setup signs the installer and its uninstaller itself ($f = the file, $q = a quote).
+            $isccArgs += @("/DSign", "/Scodesign=`$q$SignTool`$q sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 `$f")
+        }
+        & $isccPath @isccArgs (Join-Path $ProjectRoot "installer\PixelFlow.iss")
+        if ($LASTEXITCODE -ne 0) { throw "Inno Setup compile failed (exit code $LASTEXITCODE)." }
+        $setupFiles = @(Get-ChildItem -Path (Join-Path $InstallerOutput "PixelFlow-$Version-Setup*") | Sort-Object Name)
+        $setupFiles | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash, $_.Name
+        } | Set-Content (Join-Path $InstallerOutput "PixelFlow-$Version-Setup.sha256")
+        Write-Host "Installer: $($setupFiles.Name -join ', ') in $InstallerOutput (keep them in one folder)"
+    }
 
     # Only reached when everything above succeeded -- a failed build keeps its intermediates for
     # debugging.

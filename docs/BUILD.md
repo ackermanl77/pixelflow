@@ -90,7 +90,8 @@ same `scripts\build_release.ps1` on a GitHub-hosted `windows-latest` runner:
 
 - **Push a version tag** (`git tag v0.1.0 && git push origin v0.1.0`) to build
   *and* publish a GitHub Release with `PixelFlow-<version>-Windows.7z` +
-  `.sha256` attached.
+  `.sha256` and the installer (`PixelFlow-<version>-Setup.exe` + its `.bin` slices +
+  `.sha256`) attached.
 - **Or trigger it manually** — GitHub → Actions tab → "Release Build" → "Run
   workflow", type a version — which builds and uploads the same files as a
   workflow artifact without creating a tag or a Release.
@@ -168,7 +169,13 @@ This mirrors the sibling `photo_professional_tool` project's
    1048576000`, when calling through `powershell -File`: `1000MB` is only
    understood inside PowerShell). `-SkipArchive` skips this and removes a
    stale archive from an earlier build.
-9. Deletes `build-release\` and `dist-release\` after a successful build
+9. With `-Installer`, builds the per-user installer from `release\` with Inno Setup 6
+   (`installer\PixelFlow.iss`; `ISCC.exe` on `PATH` or in its default install folder) into
+   `installer-output\`: `PixelFlow-<version>-Setup.exe` plus `-1.bin`, `-2.bin`… slices (the
+   CUDA build is several GB, and a GitHub asset can't exceed 2 GiB), and a `.sha256` listing
+   every file. With `-Sign`, Inno Setup signs the installer and its uninstaller too. See
+   "The installer" below.
+10. Deletes `build-release\` and `dist-release\` after a successful build
    (`-KeepBuildFiles` keeps PyInstaller's cache for a faster rebuild; a failed
    build always keeps them for debugging).
 The result always lands in the fixed-name `release\` folder, so
@@ -197,6 +204,31 @@ from the [WebView2 downloads page](https://developer.microsoft.com/en-us/microso
 pick the version + x64 under "Fixed Version", accept the EULA, then read the
 `.cab` URL out of the page's own HTML (search it for `filestreamingservice`
 — each version gets its own URL).
+
+## The installer
+
+```powershell
+.\scripts\build_release.ps1 -Version "0.1.0" -Installer
+```
+
+- **Per user, no admin rights**: installs to `%LOCALAPPDATA%\Programs\PixelFlow` with a
+  Start-menu shortcut (a desktop one is optional). "Install for all users" is offered in the
+  wizard, or pass `/ALLUSERS`.
+- **A short install folder**: the deepest bundled file sits ~140 characters below it and Windows
+  paths stop at 260, so the installer refuses a folder longer than 110 characters before copying
+  anything (the default is ~45).
+- **In pieces**: keep `PixelFlow-<version>-Setup.exe` and all its `.bin` slices in one folder
+  and run the `.exe`; it asks for a missing slice. Check them against the `.sha256` file.
+- **User data stays put**: images, workflows, history, logs and models live in
+  `%LOCALAPPDATA%\PixelFlow` (`backend/paths.py`), never in the install folder. Uninstalling
+  asks whether to delete them too, defaulting to No (a silent `/SUPPRESSMSGBOXES` uninstall
+  keeps them).
+- **Updating**: run a newer installer over the old one; a running PixelFlow is asked to close
+  first. The installer also ships `LICENSE` and `THIRD_PARTY_NOTICES.md`.
+- **Silent install** (for testing): `PixelFlow-<version>-Setup.exe /VERYSILENT /CURRENTUSER
+  /DIR="C:\some\folder"`.
+
+The release workflow builds it on every run and publishes the slices next to the 7z archive.
 
 ## How the packaged app finds its files
 

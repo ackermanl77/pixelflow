@@ -16,6 +16,9 @@ is stamped at build time (`scripts/build_release.ps1 -Version`).
   App mode, wildcards, embeddings, node plugins, an MCP server, and model downloads from
   Hugging Face and Civitai.
 - Live latent previews, cached prompts and outputs, and a self-test of every release build.
+- A per-user Windows installer (`build_release.ps1 -Installer`, Inno Setup): no admin rights,
+  Start-menu shortcut, split into slices under GitHub's 2 GiB asset limit, and an uninstaller
+  that keeps your images, workflows and models unless you ask to delete them.
 - Uncaught errors from any thread are written to `logs/pixelflow.log`.
 - An update check that stays off until a release feed is configured; when a newer release
   exists, a notice with a Download link appears.

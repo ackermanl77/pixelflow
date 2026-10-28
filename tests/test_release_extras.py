@@ -76,3 +76,22 @@ def test_ci_matches_the_shipped_configuration_and_gates_releases():
     assert "workflow_call:" in CI
     assert "uses: ./.github/workflows/ci.yml" in RELEASE and "needs: test" in RELEASE
     assert 'python-version: "3.14"' in RELEASE
+
+
+def test_installer_packages_the_release_folder_in_slices_below_githubs_asset_limit():
+    iss = (ROOT / "installer" / "PixelFlow.iss").read_text(encoding="utf-8")
+    assert r'Source: "..\release\*"' in iss, "the finished release folder, with the WebView2 runtime"
+    assert "DiskSpanning=yes" in iss
+    slice_size = int(re.search(r"^DiskSliceSize=(\d+)$", iss, re.M).group(1))
+    assert slice_size < 2 * 1024**3, "each slice must fit a GitHub release asset"
+    assert "PrivilegesRequired=lowest" in iss, "installs per user without admin rights"
+    # The deepest bundled file is ~140 characters below {app}; Windows paths stop at 260.
+    assert int(re.search(r"MaxAppDirLength = (\d+);", iss).group(1)) <= 110
+    assert "function PrepareToInstall" in iss, "a too-long folder is refused before copying, silent or not"
+    assert r"{localappdata}\PixelFlow" in iss and "IDNO" in iss, "user data is kept unless the user agrees"
+    assert '"/DMyAppVersion=$Version"' in BUILD and r"installer\PixelFlow.iss" in BUILD
+    installer = BUILD.index("if ($Installer)")
+    assert "$LASTEXITCODE" in BUILD[installer : installer + 2000], "a failed compile must stop the build"
+    assert "-Installer" in RELEASE and r"installer-output\PixelFlow-*-Setup*" in RELEASE
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "/installer-output/" in gitignore

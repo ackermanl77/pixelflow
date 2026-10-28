@@ -69,8 +69,12 @@ folder `scripts\build_release.ps1` overwrites with the latest build on every
 run.
 
 ```powershell
-.\scripts\build_release.ps1 -Version "0.1.0"
+.\scripts\build_release.ps1 -Version "0.1.0"             # add -Installer for the Setup.exe
 ```
+
+`-Installer` also builds a per-user installer (Inno Setup 6) into `installer-output\`:
+`PixelFlow-<version>-Setup.exe` plus `.bin` slices, which must stay in one folder. See
+docs/BUILD.md, "The installer".
 
 The release script installs a **CUDA** build of torch (from the PyTorch
 cu130 index), refuses to build if the interpreter's torch has no CUDA
