@@ -233,6 +233,16 @@ re-create any single image of a batch.
 
 ### conditioning
 
+- **Regional Prompt** — a prompt for one part of the picture. Wire the main
+  prompt's `conditioning` in, write the region's `text`, and either connect a
+  `mask` (white = the region) or set the box `x`, `y`, `width`, `height`
+  (fractions of the picture, with a soft edge of `feather`). Its output goes
+  to the sampler's `positive` input, or to another Regional Prompt for a
+  second region. The main prompt keeps everywhere the regions don't cover;
+  `strength` below 1 mixes it into the region too, and overlapping regions
+  share their overlap. Each region costs one more pass of the model per step.
+  SD 1.x/2.x and SDXL checkpoints (not SD3, Flux or Z-Image). Templates >
+  **Regional prompts** has a left and a right region.
 - **Apply IP-Adapter** — uses an image as a prompt: its style, subject and
   colours steer what the sampler makes. Wire `model` and an `image` in, and
   the `model` output on to any sampler. `ipadapter` is an adapter from
@@ -290,6 +300,16 @@ re-create any single image of a batch.
   for a "hires fix".
 - **KSampler (Inpaint)** — repaints only the white part of `mask` (e.g. Load
   Image's second output) and keeps the rest of the image.
+- **Detail Faces & Hands** — redraws small faces and hands, which a model
+  draws mushy at full-picture size (as ADetailer does). Put it after a
+  sampler: wire its `image`, the same `model`, and a `positive` prompt for the
+  detail ("detailed face, sharp eyes" or "detailed hand, five fingers").
+  `targets` picks faces, hands or both. Each one is found with the Pose
+  (OpenPose) node's models, cropped with `padding` around it, re-sampled at
+  the model's own size (1024 for SDXL, 512 otherwise) at `denoise` (0.3–0.5
+  keeps the likeness), and pasted back with a soft edge of `feather`; the
+  rest of the picture is untouched. Hands are placed from the elbow and
+  wrist, so a hand behind the body may be missed.
 
 ### image (real, CPU-only operations)
 
@@ -364,6 +384,16 @@ same seeds, so only the two values differ -- then lays the results out in a
 labelled contact sheet saved to `outputs/xy_plot/` and opened in the viewer.
 A cell whose run failed is dark red. Up to 100 cells; your graph's own
 values are left as they were.
+
+## App mode
+
+**View ▸ App mode** turns a finished graph into a simple form: only the inputs
+you chose, a **Run** button and the latest result, with the graph out of the
+way. To choose an input, right-click its node and pick **Show in App mode: …**
+(again to hide it); with none chosen yet, **Show the usual inputs** picks the
+prompts, the seed, the steps and the image size. The choice is saved with the
+workflow, and the form's values are the graph's own: what you type there is
+what the node has when you go **Back to the graph**.
 
 ## Saving and loading your work
 

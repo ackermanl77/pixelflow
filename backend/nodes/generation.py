@@ -8,7 +8,7 @@ from collections import OrderedDict
 
 from PIL import Image
 
-from . import controlnet, embeddings, ip_adapter, latent_preview, models, prompt_weights, runtime, wildcards
+from . import controlnet, embeddings, ip_adapter, latent_preview, models, prompt_weights, regional, runtime, wildcards
 from .base import NodeBase, as_image_list, first_image, register_node
 from .io_nodes import MODEL_INFO_KEY, NODE_INFO_KEY, SEED_INFO_KEY
 
@@ -507,6 +507,7 @@ def _run_diffusion(
     schedule="normal",
     model=None,
     node_id=None,
+    conditioning=None,
 ):
     """Build the scheduler, resolve the seed, and call `pipe(**call_kwargs)`
     with per-image generators, progress (and live previews), and
@@ -520,6 +521,11 @@ def _run_diffusion(
     apply_loras((model or {}).get("pipeline", pipe), (model or {}).get("loras", []))
     # B20: exactly this MODEL's IP-Adapter (or none) on the shared UNet, and its image argument.
     call_kwargs = {**call_kwargs, **ip_adapter.activate(pipe, (model or {}).get("ip_adapter"))}
+    # F19: the positive prompt's regions, encoded once for this run (after the LoRAs, which can
+    # change the text encoder).
+    regions = _prepared_regions(model, pipe, conditioning, width, height)
+    unet_config = getattr(getattr(pipe, "unet", None), "config", None)
+    cfg_active = float(call_kwargs.get("guidance_scale", 0.0)) > 1.0 and getattr(unet_config, "time_cond_proj_dim", None) is None
 
     seed = int(seed)
     if seed < 0:
@@ -566,7 +572,8 @@ def _run_diffusion(
                 kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
         out_of_memory = False
         try:
-            result = pipe(**_supported_kwargs(pipe, kwargs))
+            with regional.regional_unet(pipe, regions, cfg_active):
+                result = pipe(**_supported_kwargs(pipe, kwargs))
             images = list(result.images)
             for index, image in enumerate(images):
                 image.info[SEED_INFO_KEY] = seeds[index] if index < len(seeds) else seed
@@ -593,6 +600,27 @@ def _run_diffusion(
         f"Out of GPU memory while sampling {width}x{height} (batch_size={int(batch_size)}). "
         "Try a smaller image size or batch_size, or close other GPU applications."
     )
+
+
+def _prepared_regions(model, pipe, conditioning, width, height):
+    """F19: each region of the positive conditioning as {"embeds", "pooled", "mask"} -- its prompt
+    encoded like the main one (weighting, long prompts, clip skip), its mask at the image size."""
+    positive, negative = conditioning or (None, None)
+    regions = regional.region_conditioning(positive)
+    if not regions:
+        return []
+    arch = (model or {}).get("arch") or models.pipeline_meta(pipe).get("arch")
+    if arch not in (models.ARCH_SD, models.ARCH_SDXL) or getattr(pipe, "unet", None) is None:
+        raise RuntimeError(f"Regional prompts work with SD 1.x/2.x and SDXL models, not this one ({arch or type(pipe).__name__})")
+    prepared = []
+    for region in regions:
+        region_positive = {"text": region["text"], "clip_skip": positive.get("clip_skip", 0)}
+        embeds = _prompt_kwargs(model, pipe, region_positive, negative, 1)
+        if "prompt_embeds" not in embeds:
+            raise RuntimeError("Regional prompts need a model whose prompts PixelFlow encodes itself (SD 1.x/2.x, SDXL)")
+        prepared.append({"embeds": embeds["prompt_embeds"], "pooled": embeds.get("pooled_prompt_embeds"),
+                         "mask": regional.region_mask(region, width, height)})
+    return prepared
 
 
 def _source_images(image):
@@ -701,6 +729,7 @@ class KSampler(NodeBase):
             schedule=scheduler,
             model=model,
             node_id=unique_id,
+            conditioning=(positive, negative),
         )
 
 
@@ -797,6 +826,7 @@ class KSamplerImage(NodeBase):
             schedule=scheduler,
             model=model,
             node_id=unique_id,
+            conditioning=(positive, negative),
         )
 
 
@@ -899,4 +929,5 @@ class KSamplerInpaint(NodeBase):
             schedule=scheduler,
             model=model,
             node_id=unique_id,
+            conditioning=(positive, negative),
         )

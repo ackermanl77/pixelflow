@@ -177,6 +177,34 @@ button.primary:hover { background: var(--accent-hover); }
   display: block;
 }
 
+/* App mode (UI8): the chosen inputs as a form over the canvas, with the latest result. */
+.app-mode {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: auto;
+}
+.app-mode[hidden] { display: none; }
+.app-mode-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.app-mode-head h2 { margin: 0; font-size: 16px; }
+.app-mode-hint { color: var(--text-dim); font-size: 12px; flex: 1; }
+.app-mode-body { display: flex; gap: 20px; padding: 16px; flex-wrap: wrap; }
+.app-mode-form { flex: 1 1 320px; max-width: 520px; display: flex; flex-direction: column; gap: 12px; }
+.app-mode-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-dim); }
+.app-mode-form label.inline { flex-direction: row; align-items: center; gap: 8px; }
+.app-mode-form input:not([type="checkbox"]), .app-mode-form select, .app-mode-form textarea {
+  background: var(--bg-panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 7px 8px; font: inherit;
+}
+.app-mode-form textarea { min-height: 90px; resize: vertical; }
+.app-mode-form .app-run { font-size: 15px; padding: 10px; }
+.app-mode-empty { color: var(--text-dim); line-height: 1.5; }
+.app-mode-result { flex: 2 1 360px; }
+.app-mode-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.app-mode-images img { width: 100%; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-panel); }
+
 /* Workflow tabs (UI6), over the top edge of the canvas. */
 .workflow-tabs {
   position: absolute;

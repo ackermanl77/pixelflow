@@ -11,6 +11,11 @@
       "description": "Text to image with Z-Image Turbo from ComfyUI-style split files (diffusion model, text encoder, VAE): 9 steps, no CFG, 1024 px."
     },
     {
+      "file": "regional_prompts.json",
+      "title": "Regional prompts",
+      "description": "One prompt for the whole picture and its own prompt for the left and the right half (Regional Prompt nodes)."
+    },
+    {
       "file": "img2img.json",
       "title": "Image to image",
       "description": "Re-sample an uploaded image with a prompt."

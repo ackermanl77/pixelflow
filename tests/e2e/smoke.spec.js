@@ -236,3 +236,33 @@ test("UI7: every template card shows a diagram of its graph", async ({ page, req
     return data.some((value, index) => index % 4 === 3 && value > 0);
   }))).toBe(true);
 });
+
+test("UI8: app mode shows the chosen inputs as a form, runs the graph and shows the result", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#conn-status")).toHaveAttribute("data-state", "connected");
+  // A graph that runs without a model: Empty Image -> Save Image.
+  await page.evaluate(() => {
+    const empty = LiteGraph.createNode(registeredType.EmptyImage);
+    const save = LiteGraph.createNode(registeredType.SaveImage);
+    graph.add(empty);
+    graph.add(save);
+    empty.connect(0, save, 0);
+  });
+  await menuClick(page, "#btn-app-mode");
+  await expect(page.locator("#app-mode")).toBeVisible();
+  await expect(page.locator("#app-mode .app-mode-empty")).toBeVisible();
+  await page.getByRole("button", { name: "Show the usual inputs" }).click();
+  const width = page.getByLabel(/Empty Image · width/);
+  await expect(width).toBeVisible();
+  await width.fill("96");
+  await width.press("Tab");
+  expect(await page.evaluate(() => graph._nodes.find((n) => n.comfyClass === "EmptyImage").properties.width)).toBe(96);
+  // The choice is part of the workflow, and never sent to the backend.
+  expect(await page.evaluate(() => JSON.stringify(buildPrompt()).includes("_app_inputs"))).toBe(false);
+  await page.locator("#app-mode .app-run").click();
+  const result = page.locator("#app-mode-images img").first();
+  await expect(result).toBeVisible({ timeout: 20000 });
+  await expect.poll(() => result.evaluate((img) => img.naturalWidth)).toBe(96);
+  await page.click("#app-mode-exit");
+  await expect(page.locator("#app-mode")).toBeHidden();
+});

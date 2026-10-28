@@ -1,0 +1,19 @@
+{
+  "nodes": [
+    {"id": "ckpt", "type": "LoadCheckpoint", "pos": [50, 160]},
+    {"id": "prompt", "type": "CLIPTextEncode", "pos": [320, 20], "values": {"text": "a cosy reading room, warm light"}},
+    {"id": "left", "type": "RegionalPrompt", "pos": [620, 20], "values": {"text": "a tall bookshelf full of old books", "x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0}},
+    {"id": "right", "type": "RegionalPrompt", "pos": [620, 340], "values": {"text": "a large window with a rainy city outside", "x": 0.5, "y": 0.0, "width": 0.5, "height": 1.0}},
+    {"id": "empty", "type": "EmptyImage", "pos": [320, 360], "values": {"width": 768, "height": 512}},
+    {"id": "sampler", "type": "KSampler", "pos": [940, 160], "values": {"steps": 4, "cfg": 0}},
+    {"id": "save", "type": "SaveImage", "pos": [1260, 160]}
+  ],
+  "links": [
+    ["prompt", 0, "left", "conditioning"],
+    ["left", 0, "right", "conditioning"],
+    ["ckpt", 0, "sampler", "model"],
+    ["right", 0, "sampler", "positive"],
+    ["empty", 0, "sampler", "latent_image"],
+    ["sampler", 0, "save", "image"]
+  ]
+}

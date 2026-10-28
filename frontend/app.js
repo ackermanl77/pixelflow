@@ -383,6 +383,7 @@ function makeNodeClass(nodeName, def) {
       { content: this.mode === Logic.MODE_MUTE ? "Unmute (Ctrl+M)" : "Mute (Ctrl+M)", callback: () => toggleMode([this], Logic.MODE_MUTE) },
       ...(this.comfyClass === "LoadImage" ? [null, { content: "Open in mask editor", callback: () => openMaskEditor(this) }] : []),
       ...widgetConversionOptions(this),
+      ...appModeOptions(this),
     ];
   };
   NodeCtor.prototype.onConfigure = function () {
@@ -696,6 +697,128 @@ function initMenus() {
   document.addEventListener("pointerdown", (e) => {
     if (!e.target.closest(".menu")) closeMenus();
   });
+}
+
+// ---- App mode (UI8) ----
+
+/** The node menu's "Show in App mode" toggles, one per value widget. */
+function appModeOptions(node) {
+  const shown = new Set(node.properties[Logic.APP_INPUTS_PROPERTY] || []);
+  const options = (node.widgets || [])
+    .filter((w) => ["number", "combo", "toggle", "text"].includes(w.type) && w.name !== "control after generate")
+    .map((w) => ({
+      content: `${shown.has(w.name) ? "✓ " : ""}Show in App mode: ${w.name}`,
+      callback: () => {
+        node.properties[Logic.APP_INPUTS_PROPERTY] = Logic.toggledAppInputs(node.properties[Logic.APP_INPUTS_PROPERTY], w.name);
+        scheduleHistoryPush();
+        renderAppMode();
+      },
+    }));
+  return options.length ? [null, ...options] : [];
+}
+
+function appModeOpen() {
+  return !document.getElementById("app-mode").hidden;
+}
+
+function setAppMode(open) {
+  document.getElementById("app-mode").hidden = !open;
+  document.getElementById("btn-app-mode").setAttribute("aria-pressed", String(open));
+  if (open) renderAppMode();
+  else canvas.setDirty(true, true);
+}
+
+function appField(node, name) {
+  const widget = node.widgets.find((w) => w.name === name);
+  const write = (value) => {
+    widget.value = value;
+    if (widget.callback) widget.callback(value, canvas, node);  // the widget's own normalising and history
+    canvas.setDirty(true, true);
+  };
+  let control;
+  if (widget.type === "combo") {
+    control = document.createElement("select");
+    for (const value of widget.options.values || []) control.add(new Option(value, value));
+    control.value = widget.value;
+    control.onchange = () => write(control.value);
+  } else if (widget.type === "toggle") {
+    control = document.createElement("input");
+    control.type = "checkbox";
+    control.checked = !!widget.value;
+    control.onchange = () => write(control.checked);
+  } else if (widget.type === "number") {
+    control = document.createElement("input");
+    control.type = "number";
+    Object.assign(control, { value: widget.value, min: widget.options.min ?? "", max: widget.options.max ?? "" });
+    control.step = "any"; // the widget's callback rounds and clamps (Logic.normalizeNumber)
+    control.onchange = () => {
+      write(Number(control.value));
+      control.value = widget.value; // normalised (clamped, rounded) by the widget
+    };
+  } else {
+    control = document.createElement(widget.options && widget.options.multiline ? "textarea" : "input");
+    control.value = widget.value ?? "";
+    control.oninput = () => write(control.value);
+  }
+  control.dataset.node = node.id;
+  control.dataset.input = name;
+  return control;
+}
+
+/** The App mode form (the exposed inputs, or a way to pick the usual ones) and the latest result. */
+function renderAppMode() {
+  if (!appModeOpen()) return;
+  const form = document.getElementById("app-mode-form");
+  const fields = Logic.appFields(graph._nodes);
+  const items = [];
+  if (!fields.length) {
+    const empty = document.createElement("p");
+    empty.className = "app-mode-empty";
+    empty.textContent = "No inputs are shown yet. Right-click a node and choose Show in App mode for each input "
+      + "you want here, or start with the usual ones (prompts, seed, steps, image size).";
+    const usual = document.createElement("button");
+    usual.type = "button";
+    usual.textContent = "Show the usual inputs";
+    usual.onclick = () => {
+      for (const [id, names] of Object.entries(Logic.usualAppInputs(graph._nodes))) {
+        graph.getNodeById(Number(id)).properties[Logic.APP_INPUTS_PROPERTY] = names;
+      }
+      scheduleHistoryPush();
+      renderAppMode();
+    };
+    items.push(empty, usual);
+  }
+  for (const field of fields) {
+    const control = appField(field.node, field.name);
+    const label = document.createElement("label");
+    if (control.type === "checkbox") label.className = "inline";
+    label.append(field.label, control);
+    items.push(label);
+  }
+  const run = document.createElement("button");
+  run.type = "button";
+  run.className = "primary app-run";
+  run.textContent = "Run";
+  run.onclick = () => document.getElementById("btn-queue").click();
+  items.push(run);
+  form.replaceChildren(...items);
+  renderAppModeResult();
+}
+
+function renderAppModeResult() {
+  if (!appModeOpen()) return;
+  const images = Logic.latestPromptItems(galleryItems).map((item) => {
+    const img = document.createElement("img");
+    img.src = Logic.imageUrl(item.filename, item.type);
+    img.alt = `Result: ${item.filename}`;
+    return img;
+  });
+  document.getElementById("app-mode-images").replaceChildren(...images);
+}
+
+function initAppMode() {
+  document.getElementById("btn-app-mode").onclick = () => setAppMode(!appModeOpen());
+  document.getElementById("app-mode-exit").onclick = () => setAppMode(false);
 }
 
 // ---- Canvas view toolbar and minimap (UI5) ----
@@ -1091,6 +1214,7 @@ const historyCache = new Map(); // prompt id -> history entry (for workflows / m
 function setGallery(items) {
   galleryItems = Logic.capItems(items, MAX_GALLERY_ITEMS);
   renderGallery();
+  renderAppModeResult();
 }
 
 function addGalleryItems(items) {
@@ -1582,6 +1706,7 @@ function showTab(tab) {
   canvas.setDirty(true, true);
   updateEmptyState();
   saveGraphLocally(JSON.stringify(graph.serialize()));
+  renderAppMode();
 }
 
 function switchTab(id) {
@@ -1863,6 +1988,7 @@ async function replaceGraph(data, question = "Replace the current graph?") {
   comparePreviews.clear();
   pushHistory();
   updateEmptyState();
+  renderAppMode();
   return true;
 }
 
@@ -2815,6 +2941,7 @@ function initPanels() {
 function initUI() {
   initPanels();
   initMenus();
+  initAppMode();
   initMaskEditor();
   document.getElementById("btn-xy").onclick = openXyPlot;
   document.getElementById("xy-run").onclick = runXyPlot;

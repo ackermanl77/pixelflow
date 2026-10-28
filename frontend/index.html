@@ -47,6 +47,7 @@
     <div class="menu">
       <button class="menu-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-view">View ▾</button>
       <div class="menu-list" id="menu-view" role="menu" hidden>
+        <button id="btn-app-mode" role="menuitem" title="The graph's chosen inputs as a simple form with a Run button">App mode</button>
         <button id="btn-fit-view" role="menuitem" title="Fit graph to view">Fit View</button>
         <button id="btn-help" role="menuitem" title="Keyboard shortcuts (?)">Keyboard shortcuts<kbd>?</kbd></button>
       </div>
@@ -68,6 +69,19 @@
     </div>
 
     <div id="canvas-wrap">
+      <section id="app-mode" class="app-mode" hidden aria-label="App mode">
+        <div class="app-mode-head">
+          <h2>App mode</h2>
+          <span class="app-mode-hint">The inputs chosen with a node's right-click menu (Show in App mode).</span>
+          <button id="app-mode-exit" type="button">Back to the graph</button>
+        </div>
+        <div class="app-mode-body">
+          <form id="app-mode-form" class="app-mode-form" onsubmit="return false"></form>
+          <div class="app-mode-result">
+            <div id="app-mode-images" class="app-mode-images" aria-live="polite"></div>
+          </div>
+        </div>
+      </section>
       <div id="workflow-tabs" class="workflow-tabs">
         <div id="workflow-tab-list" role="tablist" aria-label="Open workflows"></div>
         <button id="btn-new-tab" type="button" title="New workflow tab" aria-label="New workflow tab">+</button>

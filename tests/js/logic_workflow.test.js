@@ -148,6 +148,23 @@ test("minimap layout fits nodes and the view, and maps clicks back (UI5)", () =>
   assert.ok(empty.scale > 0);
 });
 
+test("app mode fields, usual inputs and the latest result (UI8)", () => {
+  assert.deepEqual(L.toggledAppInputs(undefined, "text"), ["text"]);
+  assert.deepEqual(L.toggledAppInputs(["text", "seed"], "text"), ["seed"]);
+  const node = (id, comfyClass, widgets, exposed) => ({ id, comfyClass, title: comfyClass, widgets: widgets.map((name) => ({ name })),
+    properties: exposed ? { [L.APP_INPUTS_PROPERTY]: exposed } : {} });
+  const prompt = node(1, "CLIPTextEncode", ["text", "clip_skip"], ["text"]);
+  const sampler = node(2, "KSampler", ["seed", "steps", "cfg"], ["seed", "gone"]);
+  const save = node(3, "SaveImage", ["filename_prefix"]);
+  assert.deepEqual(L.appFields([prompt, sampler, save]).map((f) => f.label), ["CLIPTextEncode · text", "KSampler · seed"]);
+  assert.deepEqual(L.usualAppInputs([prompt, sampler, save]), { 1: ["text"], 2: ["seed", "steps"] });
+  const items = [{ promptId: "a", filename: "1.png" }, { promptId: "b", filename: "2.png" }, { promptId: "b", filename: "3.png" }];
+  assert.deepEqual(L.latestPromptItems(items).map((i) => i.filename), ["2.png", "3.png"]);
+  assert.deepEqual(L.latestPromptItems([]), []);
+  const twin = node(4, "CLIPTextEncode", ["text"], ["text"]);
+  assert.deepEqual(L.appFields([prompt, twin]).map((f) => f.label), ["CLIPTextEncode #1 · text", "CLIPTextEncode #4 · text"]);
+});
+
 test("template thumbnails draw the graph fitted into the box (UI7)", () => {
   const spec = {
     nodes: [{ id: "a", type: "LoadCheckpoint", pos: [0, 0] }, { id: "b", type: "KSampler", pos: [760, 240] }],

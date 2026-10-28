@@ -360,6 +360,58 @@
     return `${m}m ${String(s).padStart(2, "0")}s`;
   }
 
+  // ---- App mode (UI8) ----
+  // A node's "_app_inputs" property (frontend-only, see isFrontendOnlyProperty) lists the widgets
+  // shown in App mode's form.
+
+  const APP_INPUTS_PROPERTY = "_app_inputs";
+  // What "Expose the usual inputs" picks when nothing is chosen yet: node type -> widget names.
+  const USUAL_APP_INPUTS = {
+    CLIPTextEncode: ["text"], RegionalPrompt: ["text"], KSampler: ["seed", "steps"], KSamplerImage: ["seed", "denoise"],
+    KSamplerInpaint: ["seed", "denoise"], EmptyImage: ["width", "height"], LoadImage: ["image"],
+  };
+
+  function toggledAppInputs(current, name) {
+    const list = Array.isArray(current) ? current : [];
+    return list.includes(name) ? list.filter((n) => n !== name) : [...list, name];
+  }
+
+  // The form's fields, in graph order: [{node, name, label}] for each exposed widget a node still
+  // has (a widget converted to an input since is skipped). `nodes` are LiteGraph nodes.
+  function appFields(nodes) {
+    const title = (node) => node.title || node.type;
+    const counts = {};
+    for (const node of nodes) counts[title(node)] = (counts[title(node)] || 0) + 1;
+    const fields = [];
+    for (const node of nodes) {
+      const exposed = (node.properties || {})[APP_INPUTS_PROPERTY] || [];
+      // Two nodes with the same title are told apart by their number.
+      const name0 = counts[title(node)] > 1 ? `${title(node)} #${node.id}` : title(node);
+      for (const name of exposed) {
+        if (!(node.widgets || []).some((w) => w.name === name)) continue;
+        fields.push({ node, name, label: `${name0} · ${name}` });
+      }
+    }
+    return fields;
+  }
+
+  // The usual inputs of a graph's nodes, as {node id: [widget names]} (only widgets they have).
+  function usualAppInputs(nodes) {
+    const out = {};
+    for (const node of nodes) {
+      const names = (USUAL_APP_INPUTS[node.comfyClass] || []).filter((n) => (node.widgets || []).some((w) => w.name === n));
+      if (names.length) out[node.id] = names;
+    }
+    return out;
+  }
+
+  // The gallery items of the newest prompt (App mode shows its result).
+  function latestPromptItems(items) {
+    if (!items.length) return [];
+    const last = items[items.length - 1].promptId;
+    return items.filter((item) => item.promptId === last);
+  }
+
   // ---- Template thumbnails (UI7) ----
 
   const TEMPLATE_NODE_SIZE = [240, 120]; // a typical node; template files store positions only
@@ -795,6 +847,11 @@
     formatDuration,
     formatBytes,
     cpuDeviceLabel,
+    APP_INPUTS_PROPERTY,
+    toggledAppInputs,
+    appFields,
+    usualAppInputs,
+    latestPromptItems,
     templateDiagram,
     tabHasNodes,
     tabIsDirty,

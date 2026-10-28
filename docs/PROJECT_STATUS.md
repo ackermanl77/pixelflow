@@ -230,13 +230,19 @@ files directly.
   three samplers, through diffusers' ControlNet pipelines derived from the
   loaded one with `from_pipe`
 - **conditioning**: CLIP Text Encode (`(word:1.2)` weighting, long prompts,
-  `clip_skip`), Apply IP-Adapter (B20, `backend/nodes/ip_adapter.py`: an
+  `clip_skip`), Regional Prompt (F19, `backend/nodes/regional.py`: a prompt for a mask or a
+  box; the sampler runs the UNet once more per region on the positive half of the batch and blends
+  the noise predictions by the regions' masks; SD 1.x/2.x and SDXL), Apply IP-Adapter (B20, `backend/nodes/ip_adapter.py`: an
   image as a prompt through diffusers' IP-Adapter; models/ipadapter +
   models/clip_vision, the encoder's config read off its tensor shapes; loaded
   per run onto the shared UNet, unloaded for a run without one)
 - **sampling**: KSampler (txt2img), KSampler (Image) (img2img), KSampler
   (Inpaint) — all with `sampler`, `scheduler` (normal/karras/trailing), `seed`,
-  `steps`, `cfg`, `batch_size` and an optional `negative`
+  `steps`, `cfg`, `batch_size` and an optional `negative`; Detail Faces & Hands (F20,
+  `backend/nodes/detailer.py`: face boxes from the COCO nose/eye/ear keypoints and hand boxes past
+  each wrist along the forearm, from the Pose node's RT-DETR + ViTPose; each padded crop re-sampled
+  by KSampler (Image) at the model's native size and pasted back through a feathered mask;
+  `tests/test_detailer.py`, a real SDXL run opt-in with PIXELFLOW_DETAILER_TESTS=1)
 - **image** (Pillow/NumPy): Empty Image, Resize, Blur, Brightness/Contrast,
   Hue/Saturation, Blend, Text Overlay, Pad Image for Outpainting (2026-10-18, B21: padding rounded up
   to multiples of 8, the new area seeded with the image's edge pixels stretched outwards and blurred
