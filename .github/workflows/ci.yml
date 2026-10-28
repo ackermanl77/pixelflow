@@ -26,7 +26,7 @@ jobs:
       # downloaded, so a green run always includes diffusion coverage (tests/_hub.py).
       PIXELFLOW_REQUIRE_HUB: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -64,7 +64,7 @@ jobs:
       PIXELFLOW_PYTHON: python
       PLAYWRIGHT_BROWSERS_PATH: "0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -103,7 +103,7 @@ jobs:
     # Known vulnerabilities in the pinned/required Python packages (OSV / PyPI advisory data).
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
