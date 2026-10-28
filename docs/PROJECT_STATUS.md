@@ -162,7 +162,8 @@ files directly.
   gallery (from history, grouped by prompt, capped at 300) and image viewer
   (←/→, metadata, Load workflow, Reuse seed, Send to Load Image, Delete);
   progress (overall + per-node bar, it/s, ETA, a live latent preview on the
-  running node and in the progress area); output images drawn inside
+  running node and in the progress area -- `backend/nodes/latent_preview.py`,
+  a latent-to-RGB projection with no VAE decode); output images drawn inside
   Save/Preview nodes; the workflow manager (load/rename/duplicate/delete,
   overwrite prompt, unsaved-changes guard, import of `.json` or a PNG with an
   embedded workflow, also by drop); the System panel (GPU/VRAM in the top

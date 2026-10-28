@@ -323,6 +323,14 @@ re-create any single image of a batch.
 - **Blend** — a `base` and an `overlay` image, a `mode` (normal / multiply /
   screen), and an `opacity` slider.
 - **Text Overlay** — draws `text` at `x`/`y` with a `size` and `color`.
+- **Pad Image for Outpainting** — extends the picture past its edges: set how
+  many pixels to add on the `left`, `top`, `right` and `bottom` (rounded up to
+  multiples of 8). Its `image` output is the bigger canvas, with the new area
+  filled from the picture's own edge colours stretched outwards and blurred,
+  and its `mask` output is white over the new area, reaching `feathering`
+  pixels into the original so the seam is repainted softly. Wire both into
+  **KSampler (Inpaint)** to have the model continue the scene. Templates >
+  **Outpaint** sets this up.
 
 **Remove Background** keeps the subject -- people, animals, objects (COCO
 panoptic Mask2Former, downloaded once, ~190 MB) -- and makes the rest

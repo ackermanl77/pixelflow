@@ -281,6 +281,20 @@ can't assume they have connectivity, or that a CDN will always be reachable.
 ## Testing a build
 
 ```powershell
+release\PixelFlow.exe --self-test     # or, from source: python desktop.py --self-test
+```
+
+`--self-test` (`backend/selftest.py`) checks the build without opening the
+window: the bundled frontend files and WebView2 runtime, torch (CUDA build,
+and a GPU matrix product matched against the CPU when there is a GPU), the
+diffusers/transformers classes the nodes use, and the real embedded server
+on a free port, running an Empty Image -> Blur -> Save Image prompt until a
+PNG is written. It works in a throwaway `PIXELFLOW_HOME`, loads no model,
+and exits 0 when every check passed; the report is also written to
+`%TEMP%\PixelFlow-selftest.txt`. `scripts/build_release.ps1` runs it on the
+finished `release\` folder and fails the build if it doesn't pass.
+
+```powershell
 release\PixelFlow.exe
 ```
 

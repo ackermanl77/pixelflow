@@ -100,7 +100,9 @@ push or a real release at all, which just builds and uploads the artifact.
 ## Nodes included
 
 - **loaders**: Load Checkpoint (installed-model dropdown or any Hub id;
-  SD 1.x/2.x, SDXL, SD3, Flux; precision option), Load LoRA, Load Image
+  SD 1.x/2.x, SDXL, SD3, Flux; precision option), Load Split Model (a model
+  in three files, ComfyUI-style: diffusion model + text encoder + VAE; Z-Image
+  Turbo), Load LoRA, Load Image
   (upload button, drag-and-drop or paste; outputs the image and its alpha
   as a MASK), Load Mask, Load ControlNet (`models/controlnet/` or a Hub id)
 - **ControlNet**: Apply ControlNet (strength and start/end; chainable; works
@@ -110,10 +112,13 @@ push or a real release at all, which just builds and uploads the artifact.
 - **Upscaling**: Load Upscale Model + Upscale Image (model) -- ESRGAN-family
   models via spandrel, tiled on the GPU
 - **conditioning**: CLIP Text Encode (`(word:1.2)` weighting, long prompts,
-  clip skip)
+  clip skip), Regional Prompt (a prompt for a box or a mask of the picture;
+  SD 1.x/2.x and SDXL), Apply IP-Adapter (an image as a prompt)
 - **sampling**: KSampler (txt2img), KSampler (Image) (img2img / hires fix),
   KSampler (Inpaint) — real diffusion sampling (GPU if available, else CPU),
-  per-image seeds in a batch, normal/karras/trailing schedules
+  per-image seeds in a batch, normal/karras/trailing schedules; Detail Faces &
+  Hands (finds faces and hands with the Pose models and redraws each at the
+  model's own resolution, ADetailer-style)
 - **image**: Empty Image, Resize, Blur, Brightness/Contrast, Hue/Saturation,
   Blend, Text Overlay, Pad Image for Outpainting (extends the canvas and masks
   the new area for KSampler (Inpaint); an "Outpaint" template sets it up) —
@@ -123,8 +128,9 @@ push or a real release at all, which just builds and uploads the artifact.
   `prefix_00001_.png`, subfolders, `%date%`/`%time%`/`%seed%`/`%model%` tokens),
   Image Compare (an A/B split slider inside the node)
 - **utility**: Reroute and Primitive (drives any widget converted to an
-  input); plus groups, a mask editor, workflow templates and an X/Y plot in
-  the UI -- see `docs/USER_GUIDE.md`
+  input); plus groups, a mask editor, workflow templates, workflow tabs, an
+  X/Y plot and **App mode** (the inputs you pick shown as a simple form with
+  a Run button) in the UI -- see `docs/USER_GUIDE.md`
 
 Also: `{a|b}` and `__file__` wildcards and `embedding:name` textual
 inversions in prompts; model downloads from Hugging Face/Civitai links
