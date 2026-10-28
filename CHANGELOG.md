@@ -20,7 +20,7 @@ is stamped at build time (`scripts/build_release.ps1 -Version`).
   Start-menu shortcut, split into slices under GitHub's 2 GiB asset limit, and an uninstaller
   that keeps your images, workflows and models unless you ask to delete them.
 - Uncaught errors from any thread are written to `logs/pixelflow.log`.
-- An update check that stays off until a release feed is configured; when a newer release
+- A once-per-launch update check against the project's GitHub Releases (update.json); when a newer release
   exists, a notice with a Download link appears.
 - Dependabot, and a `pip-audit` job in CI.
 - The MIT license, `THIRD_PARTY_NOTICES.md` (shipped in the build), `SECURITY.md` and a

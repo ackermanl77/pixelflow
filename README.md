@@ -187,7 +187,7 @@ Prompts, images and workflows stay on your computer; generation runs locally. Pi
 connects to the internet only to download models: the Hugging Face or Civitai links and Hub
 ids you enter, and the Remove Background model the first time you use it. Those downloads go
 straight to the host (Hugging Face sees your IP address and, if you set one, your access
-token). A release may switch on the update check: once per launch it downloads a small version file from the release site and sends nothing but the app's name and version. There is no telemetry.
+token). Once per launch the app checks for a newer release: it downloads a small version file (update.json) from this project's GitHub Releases and sends nothing but the app's name and version. To turn that off, set the environment variable PIXELFLOW_UPDATE_FEED_URL to off. There is no telemetry.
 
 ## Security
 

@@ -1,7 +1,12 @@
+import os
+
 import pytest
 
 from backend import main, model_roots, paths
 from backend.nodes import io_nodes
+
+# Never ask GitHub for a newer release during the tests (update_check.py).
+os.environ["PIXELFLOW_UPDATE_FEED_URL"] = "off"
 
 
 def pytest_collection_modifyitems(config, items):
