@@ -117,6 +117,8 @@ def test_the_cache_dispatches_split_names(monkeypatch):
 
     monkeypatch.setattr(split_models, "load_split_pipeline", fake_load)
     monkeypatch.setattr(models, "estimate_pipeline_bytes", lambda pipe: 5)
+    # "auto" picks bf16 only where the GPU supports it; CI's CPU torch says no.
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda *args, **kwargs: True)
     entry = models._load_entry("split:a|b|c", "cuda", "auto")
     assert entry.arch == models.ARCH_ZIMAGE and entry.dtype == "bf16" and seen["dtype"] == torch.bfloat16
 
