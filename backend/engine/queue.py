@@ -92,7 +92,8 @@ class ExecutionQueue:
     from, its status, outputs or error details, and queued/started/finished
     timestamps. When `history_path` is set, every entry that reaches a
     terminal status is appended to that JSON-lines file, and load_history()
-    restores the most recent ones after a restart. Node outputs are reused
+    restores the most recent ones after a restart. The log compacts in-session
+    once it grows beyond twice the retention limit. Node outputs are reused
     between runs through `output_cache` (see engine.graph.OutputCache).
     """
 
@@ -107,6 +108,7 @@ class ExecutionQueue:
         self.history: Dict[str, Any] = {}
         self.max_history = max_history
         self.history_path = history_path
+        self._history_line_count: Optional[int] = None
         self.output_cache = OutputCache()
         self._cancelled: set = set()
         self._worker_task: Any = None
@@ -219,8 +221,27 @@ class ExecutionQueue:
             return
         try:
             self.history_path.parent.mkdir(parents=True, exist_ok=True)
+            line_count = self._history_line_count
+            if line_count is None:
+                if self.history_path.is_file():
+                    with open(self.history_path, encoding="utf-8") as handle:
+                        line_count = sum(1 for _ in handle)
+                else:
+                    line_count = 0
             with open(self.history_path, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, default=str) + "\n")
+            line_count += 1
+            self._history_line_count = line_count
+            if line_count > 2 * max(self.max_history, 1):
+                terminal = {
+                    pid: entry for pid, entry in self.history.items()
+                    if entry.get("status") in TERMINAL_STATUSES
+                }
+                if self.max_history > 0:
+                    terminal = dict(list(terminal.items())[-self.max_history :])
+                else:
+                    terminal = {}
+                self._rewrite_history_file(terminal)
         except OSError:
             logger.warning("could not append to history file %s", self.history_path, exc_info=True)
 
@@ -251,6 +272,7 @@ class ExecutionQueue:
             logger.warning("could not read history file %s", self.history_path, exc_info=True)
             return 0
 
+        self._history_line_count = line_count
         kept = dict(list(restored.items())[-self.max_history :]) if self.max_history > 0 else {}
         self.history = {**kept, **{pid: e for pid, e in self.history.items() if pid not in kept}}
         if line_count > 2 * max(self.max_history, 1):
@@ -264,6 +286,7 @@ class ExecutionQueue:
                 for prompt_id, entry in entries.items():
                     handle.write(json.dumps({"prompt_id": prompt_id, "entry": entry}, default=str) + "\n")
             tmp.replace(self.history_path)
+            self._history_line_count = len(entries)
         except OSError:
             logger.warning("could not compact history file %s", self.history_path, exc_info=True)
 

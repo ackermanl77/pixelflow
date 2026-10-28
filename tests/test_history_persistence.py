@@ -41,13 +41,29 @@ def test_deleted_entries_stay_deleted_after_restart(tmp_path):
 
 def test_load_keeps_the_newest_and_compacts_the_file(tmp_path):
     path = tmp_path / "history.jsonl"
-    q = _queue(path, max_history=3)
-    for i in range(10):
-        q._record_history(f"p{i}", {"status": "completed"})
+    path.write_text(
+        "\n".join(
+            json.dumps({"prompt_id": f"p{i}", "entry": {"status": "completed"}})
+            for i in range(10)
+        ) + "\n",
+        encoding="utf-8",
+    )
     restored = _queue(path, max_history=3)
     assert restored.load_history() == 3
     assert list(restored.history) == ["p7", "p8", "p9"]
     assert len(path.read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_runtime_history_compacts_without_restarting(tmp_path):
+    path = tmp_path / "history.jsonl"
+    q = _queue(path, max_history=3)
+    for i in range(50):
+        q._record_history(f"p{i}", {"status": "completed"})
+    assert list(q.history) == ["p47", "p48", "p49"]
+    assert len(path.read_text(encoding="utf-8").splitlines()) <= 6
+    restored = _queue(path, max_history=3)
+    assert restored.load_history() == 3
+    assert list(restored.history) == ["p47", "p48", "p49"]
 
 
 def test_corrupt_lines_are_skipped(tmp_path):

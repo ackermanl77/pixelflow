@@ -46,6 +46,9 @@ manager = ConnectionManager()
 queue = ExecutionQueue(manager, history_path=HISTORY_PATH)
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
+# Cap decoded images too: compressed size alone does not bound memory use.
+MAX_UPLOAD_DIMENSION = 16_384
+MAX_UPLOAD_PIXELS = 40_000_000
 # Any other request body (prompts, workflows) - see security.MaxBodySizeMiddleware.
 MAX_REQUEST_BYTES = 5 * 1024 * 1024
 ALLOWED_UPLOAD_CONTENT_TYPES = {
@@ -327,6 +330,16 @@ async def upload_image(file: UploadFile = File(...)):
     # really are an image Pillow can decode before storing them.
     try:
         with Image.open(io.BytesIO(data)) as img:
+            width, height = img.size
+            if (
+                width > MAX_UPLOAD_DIMENSION
+                or height > MAX_UPLOAD_DIMENSION
+                or width * height > MAX_UPLOAD_PIXELS
+            ):
+                raise HTTPException(
+                    413,
+                    f"Image dimensions exceed the {MAX_UPLOAD_DIMENSION}px or {MAX_UPLOAD_PIXELS}-pixel limit",
+                )
             img.verify()
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError, Image.DecompressionBombError):
         raise HTTPException(400, "File is not a valid image") from None

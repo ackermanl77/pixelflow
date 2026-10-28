@@ -86,13 +86,17 @@ def test_a_plugin_package_can_use_relative_imports(plugin_dir):
     assert outputs["n"]["text"] == ["A!"]
 
 
-def test_a_broken_plugin_is_reported_and_the_rest_still_load(plugin_dir):
-    _write(plugin_dir / "a_broken.py", "raise RuntimeError('boom')\n")
+@pytest.mark.parametrize(("failure", "message"), [
+    ("raise RuntimeError('boom')", "RuntimeError: boom"),
+    ("raise SystemExit('plugin requested exit')", "SystemExit: plugin requested exit"),
+])
+def test_a_broken_plugin_is_reported_and_the_rest_still_load(plugin_dir, failure, message):
+    _write(plugin_dir / "a_broken.py", failure)
     _write(plugin_dir / "b_good.py", PLUGIN.format(cls="ShoutAfterBrokenTest"))
     _write(plugin_dir / "_helper.py", "raise SystemExit('never imported')\n")
     (plugin_dir / "notes.txt").write_text("ignored")
     broken, good = plugins.load_custom_nodes()
-    assert broken.name == "a_broken" and "RuntimeError: boom" in broken.error and broken.nodes == []
+    assert broken.name == "a_broken" and message in broken.error and broken.nodes == []
     assert good.error is None and good.nodes == ["ShoutAfterBrokenTest"]
     assert "pixelflow_custom_nodes.a_broken" not in sys.modules
 

@@ -105,7 +105,7 @@ def load_custom_nodes(folder: Optional[Path] = None) -> List[PluginResult]:
         before = dict(NODE_REGISTRY)
         try:
             _import(entry, module_name)
-        except Exception:  # noqa: BLE001 - any plugin error is reported, never fatal
+        except (Exception, SystemExit):  # noqa: BLE001 - any plugin error is reported, never fatal
             result.error = traceback.format_exc(limit=8).strip()
             logger.error("custom node plugin %s failed to load:\n%s", entry, result.error)
         replaced = sorted(k for k, cls in before.items() if NODE_REGISTRY.get(k) is not cls)

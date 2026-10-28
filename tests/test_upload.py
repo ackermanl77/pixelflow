@@ -9,12 +9,12 @@ from starlette.datastructures import Headers, UploadFile
 from backend import main
 
 
-def _png_bytes() -> bytes:
+def _png_bytes(size=(1, 1)) -> bytes:
     # Generated with Pillow rather than hand-written: the upload endpoint now
     # verifies the bytes decode as a real image (the previous hand-written
     # 1x1 PNG literal had a bad IDAT checksum and fails that check).
     buf = io.BytesIO()
-    Image.new("RGB", (1, 1), (255, 0, 0)).save(buf, "PNG")
+    Image.new("RGB", size, (255, 0, 0)).save(buf, "PNG")
     return buf.getvalue()
 
 
@@ -38,6 +38,17 @@ def test_upload_rejects_oversized_file(monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(main.upload_image(file))
     assert exc_info.value.status_code == 413
+
+
+@pytest.mark.parametrize("size", [(4, 1), (3, 2)])
+def test_upload_rejects_images_over_dimension_or_pixel_limits(upload_dir, monkeypatch, size):
+    monkeypatch.setattr(main, "MAX_UPLOAD_DIMENSION", 3)
+    monkeypatch.setattr(main, "MAX_UPLOAD_PIXELS", 5)
+    file = _upload("large.png", _png_bytes(size), "image/png")
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(main.upload_image(file))
+    assert exc_info.value.status_code == 413
+    assert list(upload_dir.iterdir()) == []
 
 
 def test_upload_accepts_a_valid_png(upload_dir):
