@@ -1,8 +1,12 @@
 """--self-test (backend/selftest.py): routing from desktop.main(), the report
 and exit code, and the real embedded server running the test prompt."""
 
-import desktop
-from backend import selftest
+import pytest
+
+pytest.importorskip("webview")  # desktop.py needs pywebview: requirements-desktop.txt only; not installed in CI
+
+import desktop  # noqa: E402
+from backend import selftest  # noqa: E402
 
 
 def test_main_runs_the_self_test_without_a_window(monkeypatch):
