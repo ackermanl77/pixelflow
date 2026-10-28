@@ -1,14 +1,14 @@
 fastapi==0.162.*
-uvicorn[standard]==0.32.*
+uvicorn[standard]==0.54.*
 pillow>=13,<14
 # Canny Edges (image_ops.CannyEdges); also a dependency of torch/diffusers.
-numpy>=1.26
+numpy>=2.5.4
 python-multipart==0.0.*
 # 2.7+: the first releases with RTX 50-series (sm_120) kernels. On Windows,
 # install the CUDA wheel from the PyTorch index first (docs/BUILD.md).
 torch>=2.7
-diffusers>=0.35,<0.41
-transformers>=4.46,<6
+diffusers>=0.42.0,<0.43
+transformers>=5.20.2,<6
 accelerate>=1.0,<2
 safetensors>=0.4
 huggingface_hub>=0.30
