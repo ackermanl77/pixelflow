@@ -52,6 +52,9 @@ MODEL_KINDS = {
     "diffusion_models": COMPONENT_EXTENSIONS,
     "text_encoders": COMPONENT_EXTENSIONS,
     "vae": COMPONENT_EXTENSIONS,
+    # IP-Adapter (B20, ip_adapter.py): adapters and their CLIP vision image encoders.
+    "ipadapter": (".safetensors", ".bin"),
+    "clip_vision": (".safetensors",),
 }
 
 DTYPE_CHOICES = ["auto", "fp16", "bf16", "fp32"]
@@ -60,6 +63,7 @@ ARCH_SD = "sd"  # Stable Diffusion 1.x / 2.x
 ARCH_SDXL = "sdxl"
 ARCH_SD3 = "sd3"
 ARCH_FLUX = "flux"
+ARCH_ZIMAGE = "zimage"  # Z-Image, loaded from split files (B26, split_models.py)
 ARCH_OTHER = "other"
 
 # infer_diffusers_model_type() result -> (arch, diffusers pipeline class).
@@ -191,6 +195,8 @@ def arch_from_pipeline_class(class_name: str) -> str:
         return ARCH_SD3
     if name.startswith("Flux"):
         return ARCH_FLUX
+    if name.startswith("ZImage"):
+        return ARCH_ZIMAGE
     if name.startswith("StableDiffusion"):
         return ARCH_SD
     return ARCH_OTHER
@@ -408,7 +414,7 @@ def resolve_dtype_name(option: str, arch: str, device: str, bf16_supported: bool
     if device != "cuda":
         return "bf16" if option == "bf16" else "fp32"
     if option == "auto":
-        if arch in (ARCH_SD3, ARCH_FLUX):
+        if arch in (ARCH_SD3, ARCH_FLUX, ARCH_ZIMAGE):
             return "bf16" if bf16_supported else "fp16"
         return "fp16"
     if option == "bf16" and not bf16_supported:
@@ -722,16 +728,24 @@ def resolve_source(ckpt_name: str, on_progress=None) -> Tuple[str, Path]:
 
 
 def _load_entry(ckpt_name: str, device: str, dtype_option: str, on_progress=None) -> CacheEntry:
-    kind, path = resolve_source(ckpt_name, on_progress)
+    from . import split_models
+
     t = runtime.torch()
     bf16 = device == "cuda" and t.cuda.is_bf16_supported()
-    if kind == "file":
-        arch, class_name = detect_single_file_arch(path)
+    if split_models.parse_split_name(ckpt_name):
+        # B26: a diffusion model, text encoder and VAE from separate files.
+        arch = split_models.split_arch(ckpt_name)
+        dtype_name = resolve_dtype_name(dtype_option, arch, device, bf16)
+        pipe, _class_name = split_models.load_split_pipeline(ckpt_name, torch_dtype(dtype_name), on_progress)
     else:
-        class_name = read_pipeline_class(path)
-        arch = arch_from_pipeline_class(class_name)
-    dtype_name = resolve_dtype_name(dtype_option, arch, device, bf16)
-    pipe = load_pipeline_files(kind, path, class_name, torch_dtype(dtype_name))
+        kind, path = resolve_source(ckpt_name, on_progress)
+        if kind == "file":
+            arch, class_name = detect_single_file_arch(path)
+        else:
+            class_name = read_pipeline_class(path)
+            arch = arch_from_pipeline_class(class_name)
+        dtype_name = resolve_dtype_name(dtype_option, arch, device, bf16)
+        pipe = load_pipeline_files(kind, path, class_name, torch_dtype(dtype_name))
     try:
         pipe.set_progress_bar_config(disable=True)
     except AttributeError:

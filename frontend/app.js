@@ -585,7 +585,7 @@ function buildSidebar() {
   for (const category of Object.keys(byCategory).sort()) {
     const group = document.createElement("div");
     group.className = "category-group";
-    const title = document.createElement("div");
+    const title = document.createElement("h3");  // a heading, so screen readers can jump between categories
     title.className = "category-title";
     title.textContent = category;
     group.appendChild(title);
@@ -645,6 +645,180 @@ function updateEmptyState() {
   document.getElementById("empty-state").classList.toggle("hidden", graph._nodes.length > 0);
 }
 
+// ---- Topbar menus (UI4) ----
+
+function closeMenus(except = null) {
+  for (const button of document.querySelectorAll(".menu-button[aria-expanded='true']")) {
+    if (button === except) continue;
+    button.setAttribute("aria-expanded", "false");
+    document.getElementById(button.getAttribute("aria-controls")).hidden = true;
+  }
+}
+
+function menuItems(list) {
+  return [...list.querySelectorAll("[role='menuitem']")].filter((item) => !item.disabled);
+}
+
+function initMenus() {
+  for (const button of document.querySelectorAll(".menu-button")) {
+    const list = document.getElementById(button.getAttribute("aria-controls"));
+    const open = (focusFirst) => {
+      closeMenus(button);
+      button.setAttribute("aria-expanded", "true");
+      list.hidden = false;
+      if (focusFirst) menuItems(list)[0]?.focus();
+    };
+    button.onclick = () => (button.getAttribute("aria-expanded") === "true" ? closeMenus() : open(false));
+    button.onkeydown = (e) => {
+      if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        open(true);
+      }
+    };
+    list.addEventListener("click", (e) => {
+      if (e.target.closest("[role='menuitem']")) closeMenus();  // the item's own handler has run
+    });
+    list.addEventListener("keydown", (e) => {
+      const items = menuItems(list);
+      const index = items.indexOf(document.activeElement);
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        items[(index + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
+      } else if (e.key === "Escape") {
+        e.stopPropagation();
+        closeMenus();
+        button.focus();
+      } else if (e.key === "Tab") {
+        closeMenus();
+      }
+    });
+  }
+  document.addEventListener("pointerdown", (e) => {
+    if (!e.target.closest(".menu")) closeMenus();
+  });
+}
+
+// ---- Canvas view toolbar and minimap (UI5) ----
+
+const CANVAS_VIEW_KEY = "pixelflow.canvasView";
+const SPLINE_LINKS = 2; // LiteGraph.SPLINE_LINK, the default
+const HIDDEN_LINKS = -1; // not one of LiteGraph's link modes: drawLink() then draws nothing
+let minimapPending = false;
+
+function loadCanvasView() {
+  try {
+    return JSON.parse(localStorage.getItem(CANVAS_VIEW_KEY) || "{}");
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveCanvasView(change) {
+  try {
+    localStorage.setItem(CANVAS_VIEW_KEY, JSON.stringify({ ...loadCanvasView(), ...change }));
+  } catch (_) {
+    // storage full or blocked: the toggles just aren't remembered
+  }
+}
+
+function zoomCanvas(scale) {
+  const wrap = document.getElementById("canvas-wrap");
+  canvas.ds.changeScale(scale, [wrap.clientWidth / 2, wrap.clientHeight / 2]);
+  canvas.setDirty(true, true);
+}
+
+function setMinimapVisible(visible) {
+  document.getElementById("minimap").hidden = !visible;
+  document.getElementById("btn-minimap").setAttribute("aria-pressed", String(visible));
+  if (visible) scheduleMinimap();
+}
+
+function setLinksVisible(visible) {
+  canvas.links_render_mode = visible ? SPLINE_LINKS : HIDDEN_LINKS;
+  document.getElementById("btn-links").setAttribute("aria-pressed", String(visible));
+  canvas.setDirty(true, true);
+}
+
+function scheduleMinimap() {
+  if (minimapPending || document.getElementById("minimap").hidden) return;
+  minimapPending = true;
+  requestAnimationFrame(() => {
+    minimapPending = false;
+    drawMinimap();
+  });
+}
+
+function minimapLayoutNow(map) {
+  const nodes = graph._nodes.map((node) => ({ x: node.pos[0], y: node.pos[1] - 20, w: node.size[0], h: node.size[1] + 20 }));
+  return Logic.minimapLayout(nodes, canvas.visible_area, map.width, map.height);
+}
+
+function drawMinimap() {
+  const map = document.getElementById("minimap");
+  const ctx = map.getContext("2d");
+  const layout = minimapLayoutNow(map);
+  const at = (x, y) => [x * layout.scale + layout.ox, y * layout.scale + layout.oy];
+  ctx.clearRect(0, 0, map.width, map.height);
+  for (const node of graph._nodes) {
+    const [x, y] = at(node.pos[0], node.pos[1] - 20);
+    ctx.fillStyle = node.mode === 0 ? node.color || "#4a4b55" : "#2c2d33";
+    ctx.fillRect(x, y, Math.max(2, node.size[0] * layout.scale), Math.max(2, (node.size[1] + 20) * layout.scale));
+  }
+  const view = canvas.visible_area;
+  const [vx, vy] = at(view[0], view[1]);
+  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#5b8def";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(vx, vy, view[2] * layout.scale, view[3] * layout.scale);
+}
+
+function centerViewOnMinimap(event) {
+  const map = document.getElementById("minimap");
+  const rect = map.getBoundingClientRect();
+  const [gx, gy] = Logic.minimapToGraph(minimapLayoutNow(map), event.clientX - rect.left, event.clientY - rect.top);
+  const wrap = document.getElementById("canvas-wrap");
+  canvas.ds.offset[0] = wrap.clientWidth / 2 / canvas.ds.scale - gx;
+  canvas.ds.offset[1] = wrap.clientHeight / 2 / canvas.ds.scale - gy;
+  canvas.setDirty(true, true);
+}
+
+function initCanvasToolbar() {
+  const reset = document.getElementById("btn-zoom-reset");
+  document.getElementById("btn-zoom-in").onclick = () => zoomCanvas(Logic.zoomStep(canvas.ds.scale, 1));
+  document.getElementById("btn-zoom-out").onclick = () => zoomCanvas(Logic.zoomStep(canvas.ds.scale, -1));
+  reset.onclick = () => zoomCanvas(1);
+  document.getElementById("btn-canvas-fit").onclick = fitView;
+  document.getElementById("btn-minimap").onclick = (e) => {
+    const visible = e.currentTarget.getAttribute("aria-pressed") !== "true";
+    setMinimapVisible(visible);
+    saveCanvasView({ minimap: visible });
+  };
+  document.getElementById("btn-links").onclick = (e) => {
+    const visible = e.currentTarget.getAttribute("aria-pressed") !== "true";
+    setLinksVisible(visible);
+    saveCanvasView({ links: visible });
+  };
+  const map = document.getElementById("minimap");
+  map.onpointerdown = (e) => {
+    map.setPointerCapture(e.pointerId);
+    centerViewOnMinimap(e);
+  };
+  map.onpointermove = (e) => {
+    if (map.hasPointerCapture(e.pointerId)) centerViewOnMinimap(e);
+  };
+  // Every redraw (wheel zoom, drag, edits) refreshes the zoom label and the minimap.
+  canvas.onDrawOverlay = () => {
+    const label = Logic.zoomPercent(canvas.ds.scale);
+    if (reset.textContent !== label) {
+      reset.textContent = label;
+      reset.setAttribute("aria-label", `Zoom ${label}; click for 100%`);
+    }
+    scheduleMinimap();
+  };
+  const saved = loadCanvasView();
+  setMinimapVisible(saved.minimap === true);
+  setLinksVisible(saved.links !== false);
+}
+
 function fitView() {
   const wrap = document.getElementById("canvas-wrap");
   const viewW = wrap.clientWidth;
@@ -673,9 +847,10 @@ function fitView() {
   let scale = Math.min((viewW - padding * 2) / bboxW, (viewH - padding * 2) / bboxH);
   scale = Math.max(0.1, Math.min(scale, 1.5));
 
+  // LiteGraph draws at (graph + offset) * scale, so the offset is in graph units.
   canvas.ds.scale = scale;
-  canvas.ds.offset[0] = viewW / 2 - ((minX + maxX) / 2) * scale;
-  canvas.ds.offset[1] = viewH / 2 - ((minY + maxY) / 2) * scale;
+  canvas.ds.offset[0] = viewW / 2 / scale - (minX + maxX) / 2;
+  canvas.ds.offset[1] = viewH / 2 / scale - (minY + maxY) / 2;
   canvas.setDirty(true, true);
 }
 
@@ -1329,13 +1504,182 @@ function isDirty() {
 function markSaved(name) {
   savedSnapshot = JSON.stringify(graph.serialize());
   if (name !== undefined) currentWorkflowName = name;
+  persistTabs();
+  renderTabs();
 }
 
-// Auto-save: every undo snapshot is also the "last graph" restored on reload.
+// Auto-save: every undo snapshot is also the "last graph" restored on reload, and the open
+// tab's graph in the stored tab list (UI6).
 function saveGraphLocally(snap) {
   try {
     localStorage.setItem(GRAPH_STORAGE_KEY, snap);
   } catch (_) { /* storage full or disabled -- auto-save is best effort */ }
+  const tab = activeTab();
+  if (tab) tab.graph = snap;
+  persistTabs();
+  renderTabs();
+}
+
+// ---- Workflow tabs (UI6) ----
+
+const TABS_STORAGE_KEY = "pixelflow.tabs";
+let tabs = []; // {id, name, graph, saved} (+ undoStack, undoIndex, view while the page is open)
+let activeTabId = null;
+
+function activeTab() {
+  return tabs.find((tab) => tab.id === activeTabId);
+}
+
+/** The open tab's live state (globals) copied into its record. */
+function stashActiveTab() {
+  const tab = activeTab();
+  if (!tab) return;
+  Object.assign(tab, {
+    graph: JSON.stringify(graph.serialize()),
+    saved: savedSnapshot,
+    name: currentWorkflowName,
+    undoStack,
+    undoIndex,
+    view: { scale: canvas.ds.scale, offset: [...canvas.ds.offset] },
+  });
+}
+
+function persistTabs() {
+  if (!tabs.length) return; // not restored yet: never overwrite the stored tabs with none
+  const tab = activeTab();
+  if (tab) Object.assign(tab, { saved: savedSnapshot, name: currentWorkflowName });
+  try {
+    localStorage.setItem(TABS_STORAGE_KEY, Logic.storeTabs(tabs, activeTabId));
+  } catch (_) { /* best effort, like the graph auto-save */ }
+}
+
+/** Put `tab`'s state in place: its graph on the canvas, its undo history, saved state and view. */
+function showTab(tab) {
+  activeTabId = tab.id;
+  suppressHistory = true;
+  try {
+    graph.configure(JSON.parse(tab.graph));
+  } catch (err) {
+    console.warn("could not open the tab's graph", err);
+    graph.clear();
+  } finally {
+    suppressHistory = false;
+  }
+  clearTimeout(historyTimer); // configure()'s node removals scheduled a push for the old graph
+  syncWidgetsFromProperties();
+  clearNodeErrors();
+  outputPreviews.clear();
+  comparePreviews.clear();
+  savedSnapshot = tab.saved;
+  currentWorkflowName = tab.name;
+  undoStack = tab.undoStack || [tab.graph];
+  undoIndex = tab.undoIndex ?? undoStack.length - 1;
+  if (tab.view) {
+    canvas.ds.scale = tab.view.scale;
+    canvas.ds.offset[0] = tab.view.offset[0];
+    canvas.ds.offset[1] = tab.view.offset[1];
+  }
+  canvas.setDirty(true, true);
+  updateEmptyState();
+  saveGraphLocally(JSON.stringify(graph.serialize()));
+}
+
+function switchTab(id) {
+  if (id === activeTabId) return;
+  const tab = tabs.find((t) => t.id === id);
+  if (!tab) return;
+  stashActiveTab();
+  showTab(tab);
+}
+
+function newTab() {
+  stashActiveTab();
+  const tab = { id: Logic.newTabId(tabs), name: "", graph: JSON.stringify({ nodes: [], links: [] }), saved: null };
+  tabs.push(tab);
+  showTab(tab);
+  return tab;
+}
+
+async function closeTab(id) {
+  const tab = tabs.find((t) => t.id === id);
+  if (!tab) return;
+  if (id === activeTabId) stashActiveTab();
+  if (Logic.tabIsDirty(tab)) {
+    const label = Logic.tabLabel(tab, false);
+    if (!(await confirmModal("Unsaved changes", `Close "${label}"? Its unsaved changes will be lost.`, "Close"))) return;
+  }
+  const next = Logic.tabAfterClose(tabs, id);
+  tabs = tabs.filter((t) => t.id !== id);
+  if (!next) {
+    activeTabId = null;
+    newTab();
+  } else if (id === activeTabId) {
+    showTab(tabs.find((t) => t.id === next));
+  } else {
+    persistTabs();
+    renderTabs();
+  }
+}
+
+function renderTabs() {
+  const list = document.getElementById("workflow-tab-list");
+  if (!list || !tabs.length) return;
+  const items = tabs.map((tab) => {
+    const active = tab.id === activeTabId;
+    const named = active ? { name: currentWorkflowName } : tab;
+    const dirty = active ? isDirty() : Logic.tabIsDirty(tab);
+    const wrap = document.createElement("div");
+    wrap.className = `wf-tab${active ? " active" : ""}`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+    button.dataset.tab = tab.id;
+    button.textContent = Logic.tabLabel(named, dirty);
+    button.title = Logic.tabLabel(named, false) + (dirty ? " (unsaved changes)" : "");
+    button.onclick = () => switchTab(tab.id);
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "wf-tab-close";
+    close.textContent = "×";
+    close.setAttribute("aria-label", `Close ${Logic.tabLabel(named, false)}`);
+    close.onclick = () => closeTab(tab.id);
+    wrap.append(button, close);
+    return wrap;
+  });
+  list.replaceChildren(...items);
+}
+
+function initTabs() {
+  document.getElementById("btn-new-tab").onclick = () => newTab();
+  // Arrow keys move between tabs (the tablist pattern); Enter/Space switch (they're buttons).
+  document.getElementById("workflow-tab-list").addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const buttons = [...document.querySelectorAll("#workflow-tab-list [role='tab']")];
+    const index = buttons.indexOf(document.activeElement);
+    if (index < 0) return;
+    e.preventDefault();
+    buttons[(index + (e.key === "ArrowRight" ? 1 : buttons.length - 1)) % buttons.length].focus();
+  });
+}
+
+/** Startup: the stored tabs, or (first run with tabs) the single auto-saved graph as one tab. */
+function restoreTabs() {
+  let stored = null;
+  try {
+    stored = Logic.parseStoredTabs(localStorage.getItem(TABS_STORAGE_KEY));
+  } catch (_) { /* storage blocked: start with one tab */ }
+  if (stored) {
+    tabs = stored.tabs;
+    showTab(tabs.find((tab) => tab.id === stored.active));
+    return;
+  }
+  restoreSavedGraph();
+  tabs = [{ id: "t1", name: "", graph: JSON.stringify(graph.serialize()), saved: null }];
+  activeTabId = "t1";
+  persistTabs();
+  renderTabs();
 }
 
 function restoreSavedGraph() {
@@ -1562,7 +1906,17 @@ async function loadWorkflow(name) {
     showToast(`Could not load "${name}": ${(await errorFromResponse(res)).message}`, "error");
     return;
   }
-  if (await replaceGraph(await res.json(), `Load "${name}"?`)) {
+  const data = await res.json();
+  // UI6: a workflow already open in another tab is switched to; one opened over a graph that
+  // has nodes gets a tab of its own (nothing is replaced, so nothing to confirm).
+  const open = tabs.find((tab) => tab.id !== activeTabId && tab.name === name);
+  if (open) {
+    switchTab(open.id);
+    closeOverlay("workflow-overlay");
+    return;
+  }
+  if (graph._nodes.length && currentWorkflowName !== name) newTab();
+  if (await replaceGraph(data, `Load "${name}"?`)) {
     markSaved(name);
     closeOverlay("workflow-overlay");
   }
@@ -1581,6 +1935,9 @@ async function renameWorkflow(name) {
     return;
   }
   if (currentWorkflowName === name) currentWorkflowName = newName;
+  for (const tab of tabs) if (tab.name === name) tab.name = newName;
+  persistTabs();
+  renderTabs();
   renderWorkflowList();
 }
 
@@ -2108,6 +2465,35 @@ function loadExampleGraph() {
   return loadTemplate("txt2img.json", "Text to image");
 }
 
+/** A template's graph as a small diagram (UI7): boxes coloured by node category, links as lines. */
+async function drawTemplateThumb(thumb, file) {
+  let spec;
+  try {
+    const res = await fetch(`templates/${file}`);
+    if (!res.ok) return;
+    spec = await res.json();
+  } catch (_) {
+    return;
+  }
+  const ctx = thumb.getContext("2d");
+  const { boxes, lines } = Logic.templateDiagram(spec, thumb.width, thumb.height);
+  const style = getComputedStyle(document.documentElement);
+  const colours = { loaders: style.getPropertyValue("--accent").trim() || "#5b8def", sampling: "#ffa931" };
+  ctx.strokeStyle = "#8a8b93";
+  ctx.lineWidth = 1;
+  for (const [x1, y1, x2, y2] of lines) {
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.bezierCurveTo((x1 + x2) / 2, y1, (x1 + x2) / 2, y2, x2, y2);
+    ctx.stroke();
+  }
+  for (const box of boxes) {
+    const category = (nodeDefs[box.type] || {}).category;
+    ctx.fillStyle = colours[category] || "#4a4b55";
+    ctx.fillRect(box.x, box.y, Math.max(2, box.w), Math.max(2, box.h));
+  }
+}
+
 async function openTemplates() {
   openOverlay("template-overlay");
   const list = document.getElementById("template-list");
@@ -2125,7 +2511,16 @@ async function openTemplates() {
       title.textContent = template.title;
       const description = document.createElement("span");
       description.textContent = template.description;
-      button.append(title, description);
+      const text = document.createElement("div");
+      text.className = "template-text";
+      text.append(title, description);
+      const thumb = document.createElement("canvas");
+      thumb.className = "template-thumb";
+      thumb.width = 120;
+      thumb.height = 64;
+      thumb.setAttribute("aria-hidden", "true");
+      button.append(thumb, text);
+      drawTemplateThumb(thumb, template.file);
       button.onclick = async () => {
         closeOverlay("template-overlay");
         await loadTemplate(template.file, template.title, document.getElementById("template-insert").checked);
@@ -2152,7 +2547,7 @@ async function refreshSystemStatus() {
       const used = info.vram_total - info.vram_free;
       button.textContent = `${info.device_name} · VRAM ${Logic.formatBytes(used)} / ${Logic.formatBytes(info.vram_total)}`;
     } else {
-      button.textContent = `CPU · torch ${info.torch}${info.cuda ? "" : " (no CUDA)"}`;
+      button.textContent = Logic.cpuDeviceLabel(info);
     }
     button.title = "System: GPU, memory, logs";
     return info;
@@ -2419,6 +2814,7 @@ function initPanels() {
 
 function initUI() {
   initPanels();
+  initMenus();
   initMaskEditor();
   document.getElementById("btn-xy").onclick = openXyPlot;
   document.getElementById("xy-run").onclick = runXyPlot;
@@ -2473,6 +2869,8 @@ function initUI() {
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
+  // One accessible control: the button opens the (hidden) file input's dialog.
+  document.getElementById("btn-import").onclick = () => document.getElementById("file-import").click();
   document.getElementById("file-import").onchange = async (e) => {
     const file = e.target.files[0];
     e.target.value = "";
@@ -2597,6 +2995,7 @@ async function main() {
   const el = document.getElementById("graph-canvas");
   canvas = new LGraphCanvas(el, graph);
   canvas.show_info = false; // LiteGraph's debug corner (T/I/N/V/FPS) is for its developers (UI1)
+  initCanvasToolbar();
   window.addEventListener("resize", resizeCanvas);
   new ResizeObserver(resizeCanvas).observe(document.getElementById("canvas-wrap"));
   resizeCanvas();
@@ -2606,7 +3005,8 @@ async function main() {
   // Bring back the graph from before the reload, if there is one. (The
   // queue panel and gallery are rebuilt from the server by resyncState()
   // once the WebSocket connects.)
-  restoreSavedGraph();
+  initTabs();
+  restoreTabs();
   setConnectionStatus("reconnecting");
   connectWebSocket();
 

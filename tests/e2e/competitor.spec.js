@@ -6,6 +6,12 @@
 /* global comparePreviews */
 const { test, expect } = require("@playwright/test");
 
+/** Click a topbar command that lives in a menu (UI4): open its menu first. */
+async function menuClick(page, selector) {
+  await page.locator(".menu").filter({ has: page.locator(selector) }).locator(".menu-button").click();
+  await page.click(selector);
+}
+
 test("Image Compare shows A and B with a split that follows the mouse", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (err) => errors.push(err.message));
@@ -52,8 +58,10 @@ test("a template can be inserted beside the current graph", async ({ page }) => 
   await page.evaluate(() => {
     addNodeToGraph("EmptyImage", [40, 60]);
   });
-  await page.click("#btn-templates");
+  await menuClick(page, "#btn-templates");
   await page.check("#template-insert");
+  // The checkbox sits beside its label instead of being stretched across the dialog (UI7).
+  expect((await page.locator("#template-insert").boundingBox()).width).toBeLessThan(30);
   await page.locator(".template-item", { hasText: "Remove background" }).click();
   await expect(page.locator("#template-overlay")).toBeHidden();
   await expect.poll(() => page.evaluate(() => graph._nodes.length)).toBe(5);

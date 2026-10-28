@@ -315,21 +315,19 @@ async def upload_image(file: UploadFile = File(...)):
     suffix = sanitize_filename(raw_path.suffix, default="")
     suffix = f".{suffix.lower()}" if suffix else ""
 
-    total = 0
-    chunks = []
-    while chunk := await file.read(1024 * 1024):
-        total += len(chunk)
-        if total > MAX_UPLOAD_BYTES:
-            raise HTTPException(413, f"File exceeds max upload size of {MAX_UPLOAD_BYTES} bytes")
-        chunks.append(chunk)
-    data = b"".join(chunks)
-    if not data:
+    source = file.file
+    source.seek(0, io.SEEK_END)
+    total = source.tell()
+    source.seek(0)
+    if total > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, f"File exceeds max upload size of {MAX_UPLOAD_BYTES} bytes")
+    if not total:
         raise HTTPException(400, "Empty file")
 
     # The content-type header is client-controlled; make sure the bytes
     # really are an image Pillow can decode before storing them.
     try:
-        with Image.open(io.BytesIO(data)) as img:
+        with Image.open(source) as img:
             width, height = img.size
             if (
                 width > MAX_UPLOAD_DIMENSION
@@ -343,13 +341,15 @@ async def upload_image(file: UploadFile = File(...)):
             img.verify()
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError, Image.DecompressionBombError):
         raise HTTPException(400, "File is not a valid image") from None
+    finally:
+        source.seek(0)
 
     try:
         dest, handle = _open_unique(stem, suffix)
     except PathTraversalError:
         raise HTTPException(400, "Invalid filename") from None
     with handle:
-        handle.write(data)
+        shutil.copyfileobj(source, handle, length=1024 * 1024)
     return {"filename": dest.name}
 
 

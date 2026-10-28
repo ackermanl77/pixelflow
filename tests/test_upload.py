@@ -58,6 +58,18 @@ def test_upload_accepts_a_valid_png(upload_dir):
     assert (upload_dir / "sample.png").read_bytes() == PNG_BYTES
 
 
+def test_upload_streams_from_spooled_file_without_reading_into_memory(upload_dir):
+    file = _upload("sample.png", PNG_BYTES, "image/png")
+
+    async def unexpected_read(*_args, **_kwargs):
+        raise AssertionError("upload endpoint should stream from the spooled file")
+
+    file.read = unexpected_read
+    result = asyncio.run(main.upload_image(file))
+    assert result == {"filename": "sample.png"}
+    assert (upload_dir / "sample.png").read_bytes() == PNG_BYTES
+
+
 def test_upload_rejects_non_image_bytes_with_an_image_content_type(upload_dir):
     file = _upload("fake.png", b"<script>alert(1)</script>", "image/png")
     with pytest.raises(HTTPException) as exc_info:

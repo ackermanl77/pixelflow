@@ -41,6 +41,8 @@ COMFY_KINDS: Dict[str, tuple] = {
     "diffusion_models": ("diffusion_models", "unet"),
     "text_encoders": ("text_encoders", "clip"),
     "vae": ("vae",),
+    "ipadapter": ("ipadapter",),
+    "clip_vision": ("clip_vision",),
 }
 
 _TTL_S = 30.0
@@ -57,6 +59,8 @@ def _own_dir(kind: str) -> Path:
         "diffusion_models": paths.DIFFUSION_MODEL_DIR,
         "text_encoders": paths.TEXT_ENCODER_DIR,
         "vae": paths.VAE_DIR,
+        "ipadapter": paths.IPADAPTER_DIR,
+        "clip_vision": paths.CLIP_VISION_DIR,
     }[kind]
 
 

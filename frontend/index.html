@@ -16,24 +16,40 @@
     <div class="group" role="group" aria-label="Run">
       <button id="btn-queue" class="primary" title="Queue Prompt (Ctrl+Enter; Ctrl+Shift+Enter queues it first)">Queue Prompt</button>
       <label class="queue-count" title="How many prompts to queue (each with the seed control applied)">×<input id="queue-count" type="number" min="1" max="100" value="1" aria-label="Number of prompts to queue" /></label>
-      <button id="btn-xy" title="X/Y Plot: queue a grid over one or two widget values and get a labelled contact sheet">X/Y Plot…</button>
+      <div class="menu">
+        <button class="menu-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-run" title="More ways to run" aria-label="More ways to run">▾</button>
+        <div class="menu-list" id="menu-run" role="menu" hidden>
+          <button id="btn-xy" role="menuitem" title="X/Y Plot: queue a grid over one or two widget values and get a labelled contact sheet">X/Y Plot…</button>
+        </div>
+      </div>
     </div>
     <span class="sep"></span>
-    <div class="group" role="group" aria-label="Workflow">
-      <button id="btn-workflows" title="Workflows (Ctrl+O)">Workflows…</button>
-      <button id="btn-save-workflow" title="Save Workflow (Ctrl+S)">Save</button>
-      <button id="btn-templates" title="Starter graphs: text to image, image to image, inpaint, hires fix, upscale">Templates…</button>
-      <button id="btn-example" title="The text-to-image template">Load Example</button>
-      <button id="btn-clear">Clear</button>
-      <button id="btn-export">Export JSON</button>
-      <label class="file-btn" title="Import a workflow .json, or a PNG made by PixelFlow / ComfyUI">Import…<input id="file-import" type="file" accept="application/json,.json,image/png" /></label>
+    <div class="menu">
+      <button class="menu-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-workflow">Workflow ▾</button>
+      <div class="menu-list" id="menu-workflow" role="menu" hidden>
+        <button id="btn-workflows" role="menuitem" title="Workflows (Ctrl+O)">Workflows…<kbd>Ctrl+O</kbd></button>
+        <button id="btn-save-workflow" role="menuitem" title="Save Workflow (Ctrl+S)">Save<kbd>Ctrl+S</kbd></button>
+        <button id="btn-templates" role="menuitem" title="Starter graphs: text to image, image to image, inpaint, hires fix, upscale">Templates…</button>
+        <button id="btn-example" role="menuitem" title="The text-to-image template">Load Example</button>
+        <button id="btn-import" role="menuitem" type="button" title="Import a workflow .json, or a PNG made by PixelFlow / ComfyUI">Import…</button>
+        <button id="btn-export" role="menuitem">Export JSON</button>
+        <button id="btn-clear" role="menuitem">Clear</button>
+      </div>
+      <input id="file-import" type="file" accept="application/json,.json,image/png" hidden tabindex="-1" aria-hidden="true" />
     </div>
-    <span class="sep"></span>
-    <div class="group" role="group" aria-label="Edit">
-      <button id="btn-undo" title="Undo (Ctrl+Z)">Undo</button>
-      <button id="btn-redo" title="Redo (Ctrl+Y)">Redo</button>
-      <button id="btn-fit-view" title="Fit graph to view">Fit View</button>
-      <button id="btn-help" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+    <div class="menu">
+      <button class="menu-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-edit">Edit ▾</button>
+      <div class="menu-list" id="menu-edit" role="menu" hidden>
+        <button id="btn-undo" role="menuitem" title="Undo (Ctrl+Z)">Undo<kbd>Ctrl+Z</kbd></button>
+        <button id="btn-redo" role="menuitem" title="Redo (Ctrl+Y)">Redo<kbd>Ctrl+Y</kbd></button>
+      </div>
+    </div>
+    <div class="menu">
+      <button class="menu-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-view">View ▾</button>
+      <div class="menu-list" id="menu-view" role="menu" hidden>
+        <button id="btn-fit-view" role="menuitem" title="Fit graph to view">Fit View</button>
+        <button id="btn-help" role="menuitem" title="Keyboard shortcuts (?)">Keyboard shortcuts<kbd>?</kbd></button>
+      </div>
     </div>
     <button id="system-status" class="system-status" title="System: GPU, memory, logs">System…</button>
   </div>
@@ -52,7 +68,20 @@
     </div>
 
     <div id="canvas-wrap">
+      <div id="workflow-tabs" class="workflow-tabs">
+        <div id="workflow-tab-list" role="tablist" aria-label="Open workflows"></div>
+        <button id="btn-new-tab" type="button" title="New workflow tab" aria-label="New workflow tab">+</button>
+      </div>
       <canvas id="graph-canvas" aria-label="Node graph editor"></canvas>
+      <canvas id="minimap" width="200" height="140" hidden aria-label="Minimap: click or drag to move the view"></canvas>
+      <div id="canvas-toolbar" role="toolbar" aria-label="Canvas view">
+        <button id="btn-zoom-out" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+        <button id="btn-zoom-reset" type="button" title="Zoom to 100%">100%</button>
+        <button id="btn-zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+        <button id="btn-canvas-fit" type="button" title="Fit the graph to the view">Fit</button>
+        <button id="btn-minimap" type="button" aria-pressed="false" title="Show or hide the minimap">Map</button>
+        <button id="btn-links" type="button" aria-pressed="true" title="Show or hide the links between nodes">Links</button>
+      </div>
       <div id="empty-state">
         <p>Your graph is empty.</p>
         <p>Drag a node from the library, right-click the canvas, drop an image or a PixelFlow PNG here, or click <strong>Load Example</strong>.</p>

@@ -97,6 +97,63 @@ class LoadCheckpoint(NodeBase):
         return ({"name": ckpt_name, "pipeline": entry.pipe, "arch": entry.arch, "dtype": entry.dtype, "loras": []},)
 
 
+@register_node("Load Split Model")
+class LoadSplitModel(NodeBase):
+    """B26: a diffusion model, a text encoder and a VAE from separate files -
+    ComfyUI's Load Diffusion Model + Load CLIP + Load VAE in one node - from
+    models/diffusion_models, text_encoders and vae (or a ComfyUI library's).
+    The family is detected from the diffusion model; supported: Z-Image Turbo
+    (split_models.SPLIT_FAMILIES). Its MODEL output works with every sampler."""
+
+    CATEGORY = "loaders"
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    FUNCTION = "load"
+    DESCRIPTION = "Loads a split model: diffusion model + text encoder + VAE files (e.g. Z-Image Turbo)."
+    CACHE_OUTPUTS = False  # as Load Checkpoint: the pipeline lives in models.PIPELINES
+
+    _KINDS = (("diffusion_model", "diffusion_models"), ("text_encoder", "text_encoders"), ("vae", "vae"))
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        tooltips = {
+            "diffusion_model": "The diffusion model (transformer) file, e.g. z_image_turbo_bf16.safetensors",
+            "text_encoder": "Its text encoder file, e.g. qwen_3_4b.safetensors",
+            "vae": "Its VAE file, e.g. ae.safetensors",
+        }
+        return {
+            "required": {name: (models.list_models(kind), {"tooltip": tooltips[name]}) for name, kind in cls._KINDS},
+            "optional": {
+                "dtype": (list(models.DTYPE_CHOICES), {"default": "auto", "tooltip": "Precision; auto = bf16 on GPU"}),
+            },
+        }
+
+    @classmethod
+    def IS_CHANGED(cls, **inputs):
+        stamps = []
+        for name, kind in cls._KINDS:
+            path = models.local_model_path(kind, str(inputs.get(name) or ""))
+            if path is not None and path.is_file():
+                stat = path.stat()
+                stamps.append(f"{stat.st_mtime_ns}:{stat.st_size}")
+        return "|".join(stamps)
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, **inputs):
+        for name, _kind in cls._KINDS:
+            value = inputs.get(name)
+            if value is not None and not str(value).strip():
+                return f"{name} is empty - pick a file"
+        return True
+
+    def load(self, diffusion_model, text_encoder, vae, dtype="auto", on_progress=None):
+        from .split_models import split_model_name
+
+        name = split_model_name(diffusion_model, text_encoder, vae)
+        entry = models.PIPELINES.get(name, dtype, on_progress)
+        return ({"name": diffusion_model, "pipeline": entry.pipe, "arch": entry.arch, "dtype": entry.dtype, "loras": []},)
+
+
 def _validate_color(color):
     try:
         ImageColor.getrgb(color)

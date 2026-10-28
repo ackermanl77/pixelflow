@@ -151,7 +151,7 @@ def _resolve_huggingface(path: str, head: Callable) -> Plan:
     headers = {}
     token = _hf_token()
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        headers["Authorization"] = "Bearer " + token
     response = head(url, headers)
     if response.status_code in (401, 403):
         raise DownloadError(
@@ -205,7 +205,7 @@ def _resolve_civitai(path: str, query: Dict[str, List[str]], fetch_json: Callabl
     headers = {}
     token = _civitai_token()
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        headers["Authorization"] = "Bearer " + token
     size_kb = chosen.get("sizeKB")
     return Plan(
         url=url,

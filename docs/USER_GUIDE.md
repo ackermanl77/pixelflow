@@ -32,8 +32,7 @@ Either way, you get the same interface described below.
 
 ```
 ┌──────────────────────────────────── Topbar ─────────────────────────────────────┐
-│ PixelFlow ● [Queue Prompt]×[1] │ [Workflows…][Save][Templates…][Load Example]   │
-│            [Export JSON][Import…] │ [Undo][Redo][Fit View][?]   GPU · VRAM used  │
+│ PixelFlow ● [Queue Prompt]×[1][▾] │ [Workflow ▾][Edit ▾][View ▾]   GPU · VRAM used │
 ├───────────┬───────────────────────────────────────┬─────────────────────────────┤
 │  Node     │                                       │  Queue  [Cancel all][Clear] │
 │  Library  │            Canvas                     │  Output Gallery             │
@@ -41,10 +40,19 @@ Either way, you get the same interface described below.
 └───────────┴───────────────────────────────────────┴─────────────────────────────┘
 ```
 
+- **Topbar** — **Queue Prompt** (with how many to queue; **▾** has X/Y Plot),
+  then three menus: **Workflow** (Workflows…, Save, Templates…, Load Example,
+  Import…, Export JSON, Clear), **Edit** (Undo, Redo) and **View** (Fit View,
+  Keyboard shortcuts). The menus work from the keyboard too (<kbd>↓</kbd> opens
+  one, arrows move, <kbd>Esc</kbd> closes), and every shortcut still works.
 - **Node Library** (left) — every available node, grouped by category, with
   a search box. Click one to drop it in the middle of the view, or drag it
   onto the canvas where you want it. Hover for a one-line description.
-- **Canvas** (center) — where you build your graph.
+- **Canvas** (center) — where you build your graph. The small toolbar in its
+  bottom-right corner zooms out (−) and in (+), shows the zoom (click it for
+  100%), fits the whole graph in view (**Fit**), shows a **Map** of the graph
+  (click or drag on it to move the view) and hides or shows the **Links**
+  between nodes. Map and Links are remembered in this browser.
 - **Queue** (top right) — your runs (restored after a reload or restart):
   queued (with its position), running (with the node and elapsed time),
   done (with the seed and how long it took), interrupted or errored.
@@ -157,6 +165,18 @@ re-create any single image of a batch.
   **Other (type a Hugging Face Hub id)…** to type any Hub repo id. `dtype`
   sets the precision (see [Generating images](#generating-images)).
   Outputs a `MODEL`.
+- **Load Split Model** — a model shipped as three files, the way ComfyUI's
+  Load Diffusion Model + Load CLIP + Load VAE take it: `diffusion_model` from
+  `models\diffusion_models\`, `text_encoder` from `models\text_encoders\`,
+  `vae` from `models\vae\` (a ComfyUI library's folders are listed too). The
+  family is read from the diffusion model; **Z-Image Turbo** is supported
+  (`z_image_turbo_bf16.safetensors` + `qwen_3_4b.safetensors` +
+  `ae.safetensors`, from Comfy-Org/z_image_turbo). The first load fetches the
+  model's small configuration files from Hugging Face (a few hundred KB, no
+  weights). Use about 9 steps and cfg 0; whatever `sampler` is picked, the
+  model keeps its own flow-matching scheduler. Outputs a `MODEL` for every
+  sampler; on a 16 GB GPU it runs with CPU offload (the text encoder and the
+  transformer take turns on the GPU).
 - **Load LoRA** — adds a LoRA from `models\loras\` to a `MODEL` at a
   `strength` (-5 to 5). Chain several for several LoRAs. Needs the `peft`
   package (included in `requirements.txt`).
@@ -213,6 +233,16 @@ re-create any single image of a batch.
 
 ### conditioning
 
+- **Apply IP-Adapter** — uses an image as a prompt: its style, subject and
+  colours steer what the sampler makes. Wire `model` and an `image` in, and
+  the `model` output on to any sampler. `ipadapter` is an adapter from
+  `models\ipadapter\` and `clip_vision` the image encoder it was trained with,
+  from `models\clip_vision\` (a ComfyUI library's folders of those names are
+  listed too) — e.g. `ip-adapter-plus_sdxl_vit-h.safetensors` with
+  `CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors` for SDXL. `weight` 0.5–0.8
+  keeps the text prompt in charge; 1 or more lets the image lead. SD 1.5 and
+  SDXL checkpoints. The adapter is loaded on the first run that uses it and
+  removed again for a run without it.
 - **CLIP Text Encode** — a multiline `text` box (your prompt), outputs
   `CONDITIONING`. Weighting works like in A1111/ComfyUI: `(word)` ×1.1,
   `((word))` ×1.21, `[word]` ÷1.1, `(word:1.4)` exactly ×1.4, and `\(` for a
@@ -336,6 +366,13 @@ A cell whose run failed is dark red. Up to 100 cells; your graph's own
 values are left as they were.
 
 ## Saving and loading your work
+
+**Tabs.** Several workflows can be open at once, as tabs along the top of the
+canvas: **+** opens an empty one, a click switches, **×** closes (it asks first
+when the tab has unsaved changes, marked •). Each tab keeps its own graph,
+undo history and view. Loading a saved workflow while the current tab has
+nodes opens it in a new tab (or switches to the tab it is already open in).
+The open tabs come back after a reload.
 
 - **Save** (<kbd>Ctrl+S</kbd>) — asks for a name the first time, then saves
   to the `workflows\` folder. Saving over an existing name asks first.
@@ -481,11 +518,13 @@ the running app noted in `server.json` in the data folder, then at 8288.
 ## Templates and Load Example
 
 **Templates…** lists read-only starter graphs (shipped as small JSON files in
-`frontend/templates/`): **Text to image**, **Image to image** (Load Image →
+`frontend/templates/`), each with a small diagram of its graph (loaders blue,
+samplers orange): **Text to image**, **Image to image** (Load Image →
 img2img sampler), **Inpaint** (Load Image + Load Mask → inpaint sampler),
 **Hires fix** (generate at 512, resize to 1024, re-sample at 0.4 denoise) and
 **Upscale** (Load Image → 2× resize → light re-sample). Each is set up for the
-default sd-turbo checkpoint (few steps, cfg 0); upload an image/mask into the
+default sd-turbo checkpoint (few steps, cfg 0); **Z-Image Turbo (split files)**
+uses Load Split Model instead (1024 px, 9 steps, cfg 0); upload an image/mask into the
 Load nodes and adjust the prompt. **Remove background** cuts the subject out of
 an uploaded image, and **Compare before / after** shows an image and a
 processed copy in an Image Compare node. Loading one replaces the graph (it

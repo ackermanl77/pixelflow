@@ -219,7 +219,10 @@ files directly.
 ## Nodes included
 
 - **loaders**: Load Checkpoint (`ckpt_name` combo of installed models plus
-  "Other…" for any Hub id; `dtype`), Load LoRA, Load Image (IMAGE + alpha
+  "Other…" for any Hub id; `dtype`), Load Split Model (B26,
+  `backend/nodes/split_models.py`: diffusion model + text encoder + VAE files,
+  family from the diffusion model's keys; Z-Image Turbo; configs/tokenizer/
+  scheduler from the family's Hub repo, no weights), Load LoRA, Load Image (IMAGE + alpha
   MASK, with an in-app mask editor), Load Mask, Load ControlNet
   (`models/controlnet/` or a Hub id), Load Upscale Model
   (`models/upscale_models/`, any architecture spandrel reads)
@@ -227,7 +230,10 @@ files directly.
   three samplers, through diffusers' ControlNet pipelines derived from the
   loaded one with `from_pipe`
 - **conditioning**: CLIP Text Encode (`(word:1.2)` weighting, long prompts,
-  `clip_skip`)
+  `clip_skip`), Apply IP-Adapter (B20, `backend/nodes/ip_adapter.py`: an
+  image as a prompt through diffusers' IP-Adapter; models/ipadapter +
+  models/clip_vision, the encoder's config read off its tensor shapes; loaded
+  per run onto the shared UNet, unloaded for a run without one)
 - **sampling**: KSampler (txt2img), KSampler (Image) (img2img), KSampler
   (Inpaint) — all with `sampler`, `scheduler` (normal/karras/trailing), `seed`,
   `steps`, `cfg`, `batch_size` and an optional `negative`

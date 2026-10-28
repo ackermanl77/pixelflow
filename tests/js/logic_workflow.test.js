@@ -121,6 +121,70 @@ test("queue rows show position and timing (F8)", () => {
   assert.equal(L.formatBytes(1536 * 1024 * 1024), "1.5 GB");
 });
 
+test("the CPU device label never says 'torch null' (UI3)", () => {
+  assert.equal(L.cpuDeviceLabel({ test_mode: true, torch: null }), "CPU · test mode (no models)");
+  assert.equal(L.cpuDeviceLabel({ torch: null }), "CPU · PyTorch not available");
+  assert.equal(L.cpuDeviceLabel({ torch: "2.14.1", cuda: false }), "CPU · torch 2.14.1 (no CUDA)");
+});
+
+test("canvas zoom steps and label (UI5)", () => {
+  assert.equal(L.zoomPercent(0.756), "76%");
+  assert.equal(L.zoomStep(1, 1), 1.25);
+  assert.equal(L.zoomStep(1, -1), 0.75);
+  assert.equal(L.zoomStep(0.8, -1), 0.75);
+  assert.equal(L.zoomStep(0.8, 1), 1);
+  assert.equal(L.zoomStep(3, 1), 3);
+  assert.equal(L.zoomStep(0.1, -1), 0.1);
+});
+
+test("minimap layout fits nodes and the view, and maps clicks back (UI5)", () => {
+  const nodes = [{ x: 0, y: 0, w: 100, h: 50 }, { x: 300, y: 200, w: 100, h: 100 }];
+  const layout = L.minimapLayout(nodes, [-100, -50, 200, 100], 200, 140, 0);
+  // Bounds -100..400 x -50..300: 500 x 350, so the scale is min(200/500, 140/350) = 0.4.
+  assert.ok(Math.abs(layout.scale - 0.4) < 1e-9);
+  const [gx, gy] = L.minimapToGraph(layout, 100, 70); // the map's centre
+  assert.ok(Math.abs(gx - 150) < 1e-9 && Math.abs(gy - 125) < 1e-9);
+  const empty = L.minimapLayout([], [0, 0, 800, 600], 200, 140);
+  assert.ok(empty.scale > 0);
+});
+
+test("template thumbnails draw the graph fitted into the box (UI7)", () => {
+  const spec = {
+    nodes: [{ id: "a", type: "LoadCheckpoint", pos: [0, 0] }, { id: "b", type: "KSampler", pos: [760, 240] }],
+    links: [["a", 0, "b", "model"], ["a", 0, "missing", "x"]],
+  };
+  const { boxes, lines } = L.templateDiagram(spec, 100, 50, 0);
+  // Span 1000 x 360: the scale is min(100/1000, 50/360) = 0.1, centred vertically.
+  assert.equal(boxes.length, 2);
+  assert.ok(boxes.every((box) => box.x >= 0 && box.y >= 0 && box.x + box.w <= 100.0001 && box.y + box.h <= 50.0001));
+  assert.ok(Math.abs(boxes[1].x - 76) < 1e-9);
+  assert.equal(lines.length, 1); // a link to a node that isn't there is dropped
+  assert.deepEqual(lines[0].map((v) => Math.round(v)), [24, 13, 76, 37]);
+  assert.deepEqual(L.templateDiagram({ nodes: [] }, 100, 50), { boxes: [], lines: [] });
+});
+
+test("workflow tabs: labels, ids, closing, storage (UI6)", () => {
+  const graphWith = (n) => JSON.stringify({ nodes: Array.from({ length: n }, (_, i) => ({ id: i })) });
+  const a = { id: "t1", name: "portrait", graph: graphWith(2), saved: graphWith(2) };
+  const b = { id: "t2", name: "", graph: graphWith(1), saved: null };
+  const c = { id: "t3", name: "", graph: graphWith(0), saved: null };
+  assert.equal(L.tabIsDirty(a), false);
+  assert.equal(L.tabIsDirty(b), true);
+  assert.equal(L.tabIsDirty(c), false); // an empty graph has nothing to lose
+  assert.equal(L.tabLabel(a, false), "portrait");
+  assert.equal(L.tabLabel(b, true), "Untitled •");
+  assert.equal(L.newTabId([a, b]), "t3");
+  assert.equal(L.newTabId([b]), "t1");
+  assert.equal(L.tabAfterClose([a, b, c], "t2"), "t3");
+  assert.equal(L.tabAfterClose([a, b, c], "t3"), "t2");
+  assert.equal(L.tabAfterClose([a], "t1"), null);
+  const stored = L.parseStoredTabs(L.storeTabs([a, { ...b, undoStack: ["x"] }], "t2"));
+  assert.deepEqual(stored, { active: "t2", tabs: [a, b] });
+  assert.equal(L.parseStoredTabs(L.storeTabs([a], "gone")).active, "t1");
+  assert.equal(L.parseStoredTabs("not json"), null);
+  assert.equal(L.parseStoredTabs(JSON.stringify({ tabs: [{ id: 3 }] })), null);
+});
+
 test("progress text and overall fraction (F10)", () => {
   const text = L.progressText({ nodeIndex: 2, nodeCount: 4, title: "KSampler", step: 5, total: 20, itPerS: 3.14159, etaS: 4.8 });
   assert.equal(text, "Node 2/4 · KSampler · step 5/20 · 3.14 it/s · ~4.8s left");

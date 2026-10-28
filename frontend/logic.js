@@ -360,6 +360,142 @@
     return `${m}m ${String(s).padStart(2, "0")}s`;
   }
 
+  // ---- Template thumbnails (UI7) ----
+
+  const TEMPLATE_NODE_SIZE = [240, 120]; // a typical node; template files store positions only
+
+  // A template's graph drawn small: its nodes as boxes and its links as lines, fitted into
+  // width x height with `padding`. Returns {boxes: [{x, y, w, h, type}], lines: [[x1, y1, x2, y2]]}.
+  function templateDiagram(spec, width, height, padding = 4) {
+    const nodes = (spec && spec.nodes) || [];
+    if (!nodes.length) return { boxes: [], lines: [] };
+    const [nodeW, nodeH] = TEMPLATE_NODE_SIZE;
+    const xs = nodes.map((node) => node.pos[0]), ys = nodes.map((node) => node.pos[1]);
+    const minX = Math.min(...xs), minY = Math.min(...ys);
+    const spanW = Math.max(...xs) + nodeW - minX, spanH = Math.max(...ys) + nodeH - minY;
+    const scale = Math.min((width - 2 * padding) / spanW, (height - 2 * padding) / spanH);
+    const ox = (width - spanW * scale) / 2, oy = (height - spanH * scale) / 2;
+    const byId = new Map();
+    const boxes = nodes.map((node) => {
+      const box = { x: ox + (node.pos[0] - minX) * scale, y: oy + (node.pos[1] - minY) * scale, w: nodeW * scale, h: nodeH * scale, type: node.type };
+      byId.set(node.id, box);
+      return box;
+    });
+    const lines = ((spec && spec.links) || [])
+      .filter(([from, , to]) => byId.has(from) && byId.has(to))
+      .map(([from, , to]) => {
+        const a = byId.get(from), b = byId.get(to);
+        return [a.x + a.w, a.y + a.h / 2, b.x, b.y + b.h / 2];
+      });
+    return { boxes, lines };
+  }
+
+  // ---- Workflow tabs (UI6) ----
+  // A tab is {id, name, graph, saved}: graph and saved are serialized graphs (saved = the last
+  // save/load, null when never saved); name is the workflow name ("" = untitled).
+
+  function tabHasNodes(graphJson) {
+    try {
+      const nodes = JSON.parse(graphJson).nodes;
+      return Array.isArray(nodes) && nodes.length > 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function tabIsDirty(tab) {
+    return tabHasNodes(tab.graph) && tab.graph !== tab.saved;
+  }
+
+  function tabLabel(tab, dirty) {
+    return `${tab.name || "Untitled"}${dirty ? " •" : ""}`;
+  }
+
+  function newTabId(tabs) {
+    let n = 1;
+    while (tabs.some((tab) => tab.id === `t${n}`)) n++;
+    return `t${n}`;
+  }
+
+  // The tab to show after closing `id`: the next one, else the previous one; null when none is left.
+  function tabAfterClose(tabs, id) {
+    const index = tabs.findIndex((tab) => tab.id === id);
+    const rest = tabs.filter((tab) => tab.id !== id);
+    if (!rest.length) return null;
+    return rest[Math.min(Math.max(index, 0), rest.length - 1)].id;
+  }
+
+  function storeTabs(tabs, active) {
+    return JSON.stringify({ active, tabs: tabs.map(({ id, name, graph, saved }) => ({ id, name, graph, saved })) });
+  }
+
+  // The tabs stored by storeTabs(), checked; null when there are none usable.
+  function parseStoredTabs(text) {
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (_) {
+      return null;
+    }
+    if (!data || !Array.isArray(data.tabs)) return null;
+    const tabs = data.tabs
+      .filter((tab) => tab && typeof tab.id === "string" && typeof tab.graph === "string")
+      .map((tab) => ({
+        id: tab.id,
+        name: typeof tab.name === "string" ? tab.name : "",
+        graph: tab.graph,
+        saved: typeof tab.saved === "string" ? tab.saved : null,
+      }));
+    if (!tabs.length) return null;
+    return { active: tabs.some((tab) => tab.id === data.active) ? data.active : tabs[0].id, tabs };
+  }
+
+  // ---- Canvas view toolbar (UI5) ----
+
+  const ZOOM_STEPS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3];
+
+  function zoomPercent(scale) {
+    return `${Math.round(scale * 100)}%`;
+  }
+
+  // The next zoom step in/out from `scale` (+1 or -1), clamped to the first/last step.
+  function zoomStep(scale, direction) {
+    if (direction > 0) return ZOOM_STEPS.find((step) => step > scale * 1.001) ?? ZOOM_STEPS[ZOOM_STEPS.length - 1];
+    return [...ZOOM_STEPS].reverse().find((step) => step < scale * 0.999) ?? ZOOM_STEPS[0];
+  }
+
+  // Where the minimap draws things: the bounds of every node and of the visible area, fitted
+  // into a mapW x mapH map with `padding`. `nodes` are {x, y, w, h}, `view` [x, y, w, h], all
+  // in graph coordinates. Returns {scale, ox, oy} with map = (graph - origin) * scale + offset.
+  function minimapLayout(nodes, view, mapW, mapH, padding = 6) {
+    let minX = view[0], minY = view[1], maxX = view[0] + view[2], maxY = view[1] + view[3];
+    for (const node of nodes) {
+      minX = Math.min(minX, node.x);
+      minY = Math.min(minY, node.y);
+      maxX = Math.max(maxX, node.x + node.w);
+      maxY = Math.max(maxY, node.y + node.h);
+    }
+    const width = Math.max(maxX - minX, 1), height = Math.max(maxY - minY, 1);
+    const scale = Math.min((mapW - 2 * padding) / width, (mapH - 2 * padding) / height);
+    return {
+      scale,
+      ox: (mapW - width * scale) / 2 - minX * scale,
+      oy: (mapH - height * scale) / 2 - minY * scale,
+    };
+  }
+
+  function minimapToGraph(layout, x, y) {
+    return [(x - layout.ox) / layout.scale, (y - layout.oy) / layout.scale];
+  }
+
+  // The device button's label without a GPU (UI3): never "torch null" -- the test-mode server
+  // and a missing PyTorch report no torch version.
+  function cpuDeviceLabel(info) {
+    if (info && info.test_mode) return "CPU · test mode (no models)";
+    if (!info || !info.torch) return "CPU · PyTorch not available";
+    return `CPU · torch ${info.torch}${info.cuda ? "" : " (no CUDA)"}`;
+  }
+
   function formatBytes(bytes) {
     if (!Number.isFinite(bytes)) return "";
     const units = ["B", "KB", "MB", "GB", "TB"];
@@ -658,6 +794,20 @@
     workflowFromPngChunks,
     formatDuration,
     formatBytes,
+    cpuDeviceLabel,
+    templateDiagram,
+    tabHasNodes,
+    tabIsDirty,
+    tabLabel,
+    newTabId,
+    tabAfterClose,
+    storeTabs,
+    parseStoredTabs,
+    ZOOM_STEPS,
+    zoomPercent,
+    zoomStep,
+    minimapLayout,
+    minimapToGraph,
     describeCustomNodes,
     describeDownload,
     withSavedPrompt,

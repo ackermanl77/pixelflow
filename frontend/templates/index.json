@@ -6,6 +6,11 @@
       "description": "Prompt -> image with the default sd-turbo settings."
     },
     {
+      "file": "z_image_turbo.json",
+      "title": "Z-Image Turbo (split files)",
+      "description": "Text to image with Z-Image Turbo from ComfyUI-style split files (diffusion model, text encoder, VAE): 9 steps, no CFG, 1024 px."
+    },
+    {
       "file": "img2img.json",
       "title": "Image to image",
       "description": "Re-sample an uploaded image with a prompt."

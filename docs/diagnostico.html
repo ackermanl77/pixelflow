@@ -1,0 +1,272 @@
+<title>Diagnóstico PixelFlow</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; the architecture drawn as litegraph-style nodes wired left to right */
+:root {
+  --bg: #f3f4f7;
+  --surface: #ffffff;
+  --ink: #171b26;
+  --muted: #5d6476;
+  --line: #dde0e8;
+  --accent: #3b5bdb;
+  --accent-soft: #e6ebfb;
+  --node-head: #2a3040;
+  --node-head-ink: #eef0f6;
+  --ok: #1f7a4d;   --ok-soft: #e1f2e8;
+  --warn: #9a5b00; --warn-soft: #fbefd9;
+  --bad: #b42318;  --bad-soft: #fbe4e1;
+  --info: #475069; --info-soft: #eceef3;
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151c; --surface: #1a1e28; --ink: #e7e9f0; --muted: #9aa1b4; --line: #2b3140;
+    --accent: #8ea4ff; --accent-soft: #232b48; --node-head: #2c3346; --node-head-ink: #e7e9f0;
+    --ok: #5fcf95; --ok-soft: #173326; --warn: #f0b552; --warn-soft: #362a14;
+    --bad: #ff8a7d; --bad-soft: #3a1c1a; --info: #b4bbcd; --info-soft: #252a37;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151c; --surface: #1a1e28; --ink: #e7e9f0; --muted: #9aa1b4; --line: #2b3140;
+  --accent: #8ea4ff; --accent-soft: #232b48; --node-head: #2c3346; --node-head-ink: #e7e9f0;
+  --ok: #5fcf95; --ok-soft: #173326; --warn: #f0b552; --warn-soft: #362a14;
+  --bad: #ff8a7d; --bad-soft: #3a1c1a; --info: #b4bbcd; --info-soft: #252a37;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--f-body); }
+.wrap { max-width: 960px; margin: 0 auto; padding-block: 40px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 44px; }
+.mono { font-family: var(--f-mono); font-size: 0.86em; }
+.num { font-variant-numeric: tabular-nums; }
+h1, h2 { font-family: var(--f-display); text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: clamp(2rem, 5vw, 2.9rem); line-height: 1.1; }
+h2 { font-size: 1.35rem; }
+.eyebrow { font: 500 0.78rem var(--f-mono); color: var(--muted); letter-spacing: 0.02em; }
+.sub { font-size: 0.85rem; color: var(--muted); }
+header { display: grid; gap: 12px; }
+header p { margin: 0; max-width: 62ch; color: var(--muted); font-size: 1.05rem; }
+section { display: grid; gap: 16px; }
+.sec-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+
+/* KPI row */
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 6px; align-content: start; }
+.kpi .big { font: 700 1.9rem/1 var(--f-display); font-variant-numeric: tabular-nums; }
+.kpi .lbl { font-weight: 600; }
+.kpi .gauge-row { display: flex; align-items: center; gap: 12px; }
+.kpi.alert { border-color: var(--warn); }
+.kpi.alert .big { color: var(--warn); }
+@media (max-width: 760px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 420px) { .kpis { grid-template-columns: 1fr; } }
+
+/* Architecture as nodes */
+.graph { overflow-x: auto; padding-bottom: 4px; }
+.flow { display: flex; align-items: stretch; gap: 0; min-width: 760px; }
+.node { flex: 1 1 0; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+.node .head { background: var(--node-head); color: var(--node-head-ink); font: 500 0.8rem var(--f-mono); padding: 6px 10px; display: flex; align-items: center; gap: 8px; }
+.node .head::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+.node .body { padding: 10px 12px; display: grid; gap: 4px; font-size: 0.86rem; }
+.node .body b { font-size: 0.95rem; }
+.node .body span { color: var(--muted); }
+.wire { flex: 0 0 34px; display: flex; align-items: center; justify-content: center; color: var(--accent); }
+.wire svg { width: 34px; height: 14px; }
+.side { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.side .node .head::before { background: var(--muted); }
+@media (max-width: 760px) { .side { grid-template-columns: 1fr; } }
+.note { font-size: 0.85rem; color: var(--muted); margin: 0; }
+
+/* Bars */
+.bars { display: grid; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+.bar { display: grid; grid-template-columns: 170px minmax(0, 1fr) 52px; align-items: center; gap: 12px; font-size: 0.86rem; }
+.bar .name { font-family: var(--f-mono); font-size: 0.8rem; overflow-wrap: anywhere; }
+.bar .track { height: 14px; background: var(--info-soft); border-radius: 3px; overflow: hidden; }
+.bar .fill { height: 100%; background: var(--accent); opacity: 0.55; border-radius: 3px; }
+.bar.top .fill { opacity: 1; }
+.bar .v { text-align: right; font-variant-numeric: tabular-nums; }
+.bars .axis { display: grid; grid-template-columns: 170px minmax(0, 1fr) 52px; gap: 12px; font: 0.72rem var(--f-mono); color: var(--muted); }
+.axis .ticks { display: flex; justify-content: space-between; }
+@media (max-width: 520px) { .bar, .bars .axis { grid-template-columns: 112px minmax(0, 1fr) 44px; } }
+
+/* Table */
+.tbl { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.88rem; min-width: 600px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 500 0.74rem var(--f-mono); color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 600; white-space: nowrap; }
+td:last-child { color: var(--muted); }
+.pill { display: inline-block; font: 500 0.72rem var(--f-mono); padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.p-ok { background: var(--ok-soft); color: var(--ok); }
+.p-warn { background: var(--warn-soft); color: var(--warn); }
+.p-bad { background: var(--bad-soft); color: var(--bad); }
+.p-info { background: var(--info-soft); color: var(--info); }
+
+/* Two columns */
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 32px; align-items: start; }
+@media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
+ul.done, ul.issues, ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+ul.done li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; font-size: 0.92rem; }
+ul.done li::before { content: "✓"; color: var(--ok); font-weight: 700; }
+ul.done code, .issues code, .steps code { font-family: var(--f-mono); font-size: 0.82em; }
+.issues li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 4px 12px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.issues .pill { justify-self: start; align-self: start; margin-top: 2px; }
+.issues b { display: block; }
+.issues p { margin: 2px 0 0; font-size: 0.86rem; color: var(--muted); }
+
+.steps { counter-reset: s; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 14px; padding: 14px 0; border-top: 1px solid var(--line); }
+.steps li:first-child { border-top: 0; }
+.steps li::before { content: counter(s); font: 700 1.1rem/30px var(--f-display); width: 30px; height: 30px; text-align: center; border-radius: 50%; background: var(--accent-soft); color: var(--accent); }
+.steps b { display: block; margin-bottom: 2px; }
+.steps p { margin: 0; color: var(--muted); font-size: 0.9rem; max-width: 68ch; }
+footer { font-size: 0.8rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">backend/ · frontend/ · docs/PROJECT_STATUS.md — 2026‑10‑27</div>
+    <h1>Diagnóstico PixelFlow</h1>
+    <p>Estado actual de la app de grafos de nodos estilo ComfyUI (FastAPI + litegraph.js, CUDA): qué está verificado de punta a punta, qué solo se probó con modelos diminutos y qué cambios siguen sin commit.</p>
+  </header>
+
+  <div class="kpis">
+    <div class="kpi">
+      <div class="gauge-row">
+        <svg width="54" height="54" viewBox="0 0 54 54" aria-hidden="true">
+          <circle cx="27" cy="27" r="22" fill="none" stroke="var(--info-soft)" stroke-width="7"/>
+          <circle cx="27" cy="27" r="22" fill="none" stroke="var(--ok)" stroke-width="7" stroke-linecap="round"
+            stroke-dasharray="137.66 138.23" transform="rotate(-90 27 27)"/>
+        </svg>
+        <div class="big">477</div>
+      </div>
+      <div class="lbl">Tests pytest pasando</div>
+      <div class="sub">2 omitidos (GPU opt‑in) · 44 archivos · 45.8 s</div>
+    </div>
+    <div class="kpi">
+      <div class="big">30/30</div>
+      <div class="lbl">Tests JS + ESLint</div>
+      <div class="sub">node:test sobre <span class="mono">logic.js</span>; lint limpio; 11 e2e Playwright (según docs)</div>
+    </div>
+    <div class="kpi">
+      <div class="big">2 633</div>
+      <div class="lbl"><span class="mono">frontend/app.js</span></div>
+      <div class="sub">79 % del JS propio del frontend en un archivo</div>
+    </div>
+    <div class="kpi alert">
+      <div class="big">6</div>
+      <div class="lbl">Archivos sin commit</div>
+      <div class="sub">+77 / −10 líneas · último commit 2026‑10‑22 (63 en total)</div>
+    </div>
+  </div>
+
+  <section>
+    <div class="sec-head"><h2>Arquitectura</h2><span class="sub">1 proceso, 1 frontend · todo conectado</span></div>
+    <div class="graph">
+      <div class="flow">
+        <div class="node"><div class="head">frontend</div><div class="body"><b>Canvas litegraph.js</b><span>app.js + logic.js; arma el prompt, cola, galería, workflows</span></div></div>
+        <div class="wire"><svg viewBox="0 0 34 14"><path d="M0 7h28" stroke="currentColor" stroke-width="2"/><path d="M26 2l6 5-6 5" fill="none" stroke="currentColor" stroke-width="2"/></svg></div>
+        <div class="node"><div class="head">backend/main.py</div><div class="body"><b>FastAPI :8288</b><span>/api/* y /ws; sirve también el frontend estático</span></div></div>
+        <div class="wire"><svg viewBox="0 0 34 14"><path d="M0 7h28" stroke="currentColor" stroke-width="2"/><path d="M26 2l6 5-6 5" fill="none" stroke="currentColor" stroke-width="2"/></svg></div>
+        <div class="node"><div class="head">backend/engine</div><div class="body"><b>validate → execute</b><span>cola de un solo worker; OutputCache en memoria y en disco</span></div></div>
+        <div class="wire"><svg viewBox="0 0 34 14"><path d="M0 7h28" stroke="currentColor" stroke-width="2"/><path d="M26 2l6 5-6 5" fill="none" stroke="currentColor" stroke-width="2"/></svg></div>
+        <div class="node"><div class="head">backend/nodes</div><div class="body"><b>NODE_REGISTRY</b><span>samplers, loaders, preprocesadores, imagen</span></div></div>
+        <div class="wire"><svg viewBox="0 0 34 14"><path d="M0 7h28" stroke="currentColor" stroke-width="2"/><path d="M26 2l6 5-6 5" fill="none" stroke="currentColor" stroke-width="2"/></svg></div>
+        <div class="node"><div class="head">runtime</div><div class="body"><b>torch / diffusers</b><span>CUDA en RTX 5080; import diferido, nunca en test mode</span></div></div>
+      </div>
+    </div>
+    <div class="side">
+      <div class="node"><div class="head">desktop.py</div><div class="body"><b>Ventana pywebview</b><span>mismo servidor en un hilo; base de PixelFlow.exe</span></div></div>
+      <div class="node"><div class="head">mcp_server.py</div><div class="body"><b>MCP por stdio</b><span>maneja la app corriendo vía HTTP; lee server.json</span></div></div>
+      <div class="node"><div class="head">plugins.py</div><div class="body"><b>custom_nodes/</b><span>nodos de terceros importados al arrancar</span></div></div>
+    </div>
+    <p class="note">Nodos más conectados del grafo de código: <span class="mono">execute_prompt()</span> (79 aristas), <span class="mono">NodeBase</span> (53), <span class="mono">validate_prompt()</span> y <span class="mono">register_node()</span> (51 cada uno).</p>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Composición del código</h2><span class="sub">top 8 de 37 archivos propios (33 .py en backend/ + 4 del frontend), por líneas</span></div>
+    <div class="bars">
+      <div class="bar top"><span class="name">frontend/app.js</span><div class="track"><div class="fill" style="width:87.8%"></div></div><span class="v">2 633</span></div>
+      <div class="bar"><span class="name">nodes/generation.py</span><div class="track"><div class="fill" style="width:29.8%"></div></div><span class="v">894</span></div>
+      <div class="bar"><span class="name">nodes/models.py</span><div class="track"><div class="fill" style="width:26.2%"></div></div><span class="v">786</span></div>
+      <div class="bar"><span class="name">main.py</span><div class="track"><div class="fill" style="width:24.3%"></div></div><span class="v">729</span></div>
+      <div class="bar"><span class="name">frontend/logic.js</span><div class="track"><div class="fill" style="width:22.9%"></div></div><span class="v">687</span></div>
+      <div class="bar"><span class="name">engine/graph.py</span><div class="track"><div class="fill" style="width:22.8%"></div></div><span class="v">685</span></div>
+      <div class="bar"><span class="name">nodes/prompt_weights.py</span><div class="track"><div class="fill" style="width:16.4%"></div></div><span class="v">491</span></div>
+      <div class="bar"><span class="name">model_downloads.py</span><div class="track"><div class="fill" style="width:16%"></div></div><span class="v">480</span></div>
+      <div class="axis"><span></span><div class="ticks"><span>0</span><span>1 000</span><span>2 000</span><span>3 000</span></div><span></span></div>
+    </div>
+    <p class="note"><span class="mono">app.js</span> es 2.9× el segundo archivo más grande: concentra paleta, cola, galería, visor, workflows, panel de sistema, grupos, editor de máscaras y X/Y plot. El backend está bien repartido (8 592 líneas en 33 módulos).</p>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Matriz de funcionalidades</h2><span class="sub">implementado vs. verificado</span></div>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Funcionalidad</th><th>Estado</th><th>Detalle</th></tr></thead>
+        <tbody>
+          <tr><td>SD 1.x / 2.x</td><td><span class="pill p-ok">Verificada</span></td><td>txt2img, img2img, inpaint y outpaint; tests con checkpoint diminuto + tests GPU opt‑in</td></tr>
+          <tr><td>Upscale (spandrel)</td><td><span class="pill p-ok">Verificada</span></td><td>RealESRGAN_x4plus real: 512 → 2048 px en 0.38 s</td></tr>
+          <tr><td>Depth / Pose</td><td><span class="pill p-ok">Verificada</span></td><td>Depth Anything V2 y RT‑DETR + ViTPose reales; Pose dibuja solo cuerpo, sin manos ni cara</td></tr>
+          <tr><td>Output cache en disco</td><td><span class="pill p-ok">Verificada</span></td><td>PNG/.npy/JSON por firma, sin pickle; se vacía al cambiar de versión</td></tr>
+          <tr><td>MCP, descargas, wildcards, plugins</td><td><span class="pill p-ok">Verificada</span></td><td>F21–F28 con tests propios; panel MCP y Image Compare cubiertos por e2e</td></tr>
+          <tr><td>SDXL / SD3 / Flux</td><td><span class="pill p-warn">Parcial</span></td><td>Detectados y cargados; prompt encoding igual al de diffusers con encoders diminutos. Pesos reales nunca ejecutados</td></tr>
+          <tr><td>ControlNet</td><td><span class="pill p-warn">Parcial</span></td><td>Solo con un ControlNet construido desde la UNet de prueba; ningún checkpoint real</td></tr>
+          <tr><td>Soft Edges / Lineart / Scribble</td><td><span class="pill p-warn">Parcial</span></td><td>Aproximaciones clásicas, no los anotadores aprendidos</td></tr>
+          <tr><td>Firma del .exe</td><td><span class="pill p-warn">Parcial</span></td><td><span class="mono">-Sign</span> funciona con certificado autofirmado; SmartScreen sigue avisando</td></tr>
+          <tr><td>torch.compile</td><td><span class="pill p-info">Opt‑in</span></td><td>~40 % más rápido tras compilar; no va en el paquete (triton‑windows)</td></tr>
+          <tr><td>Generación, visor, uploads en UI</td><td><span class="pill p-bad">Sin e2e</span></td><td>Necesitan una pasada manual en ventana real; Playwright no los cubre</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="cols">
+    <section>
+      <h2>Resuelto recientemente</h2>
+      <ul class="done">
+        <li><span>Modelos de la biblioteca de ComfyUI visibles en PixelFlow (B25)</span></li>
+        <li><span>Descargas interrumpidas que se reanudan con Range + If‑Range (F26)</span></li>
+        <li><span>Panel "Connect an assistant" con la config MCP lista para copiar (F27)</span></li>
+        <li><span>Nodos Image Compare y Remove Background (F28)</span></li>
+        <li><span>DLLs de VC++ faltantes y programas que bloquean archivos, nombrados en el error (R8)</span></li>
+        <li><span><code>PixelFlow.exe --self-test</code> con un prompt real después de cada build</span></li>
+        <li><span>Outpainting con relleno sembrado desde los bordes (B21)</span></li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Problemas abiertos</h2>
+      <ul class="issues">
+        <li><span class="pill p-bad">Alto</span><div><b>Cambios de robustez sin commit</b><p>Compactación de <code>history.jsonl</code> durante la sesión y tope de 16 384 px / 40 MP en uploads. Los tests pasan, pero llevan 5 días solo en el disco (y en OneDrive).</p></div></li>
+        <li><span class="pill p-bad">Alto</span><div><b>SDXL / SD3 / Flux sin pesos reales</b><p>Prompts largos o ponderados y los colores del preview no se han visto con modelos de varios GB.</p></div></li>
+        <li><span class="pill p-warn">Medio</span><div><b>ControlNet real sin probar</b><p>Ni SD 1.5 ni SDXL; Pose tampoco ha guiado un ControlNet de OpenPose real.</p></div></li>
+        <li><span class="pill p-warn">Medio</span><div><b><code>app.js</code> monolítico</b><p>2 633 líneas; solo los helpers puros salieron a <code>logic.js</code> y tienen tests unitarios.</p></div></li>
+        <li><span class="pill p-warn">Medio</span><div><b>Sin e2e de generación, visor y uploads</b><p>El flujo principal del usuario depende de una revisión manual.</p></div></li>
+        <li><span class="pill p-info">Bajo</span><div><b>Cache obsoleta desde código fuente</b><p>La versión es siempre "dev": tras editar un nodo hay que usar Free memory.</p></div></li>
+        <li><span class="pill p-info">Bajo</span><div><b>PROJECT_STATUS.md desactualizado</b><p>Dice 473 pytest y 29 tests JS; hoy son 477 y 30.</p></div></li>
+      </ul>
+    </section>
+  </div>
+
+  <section>
+    <div class="sec-head"><h2>Próximos pasos recomendados</h2><span class="sub">en orden</span></div>
+    <ol class="steps">
+      <li><div><b>Hacer commit de los 6 archivos pendientes</b><p>La compactación del historial y el límite de uploads ya pasan la suite completa. Sin commit, una sincronización de OneDrive o un checkout los puede pisar.</p></div></li>
+      <li><div><b>Correr un SDXL y un Flux reales en la RTX 5080</b><p>Es la brecha más grande entre lo que la app promete y lo verificado: prompts ponderados, prompts largos, clip skip y colores del preview latente.</p></div></li>
+      <li><div><b>Agregar e2e de upload y visor en test mode</b><p>Load Image → Save Image y el visor no necesitan torch, así que Playwright los puede cubrir sin GPU. La generación real queda para los tests GPU opt‑in.</p></div></li>
+      <li><div><b>Probar un ControlNet real (Canny y OpenPose sobre SD 1.5)</b><p>Los preprocesadores ya funcionan con modelos reales; falta cerrar el circuito con un checkpoint de ControlNet de verdad.</p></div></li>
+      <li><div><b>Partir <code>app.js</code> por panel</b><p>Cola, galería/visor, workflows y panel de sistema en módulos propios, moviendo más lógica a <code>logic.js</code> donde ya tiene tests.</p></div></li>
+      <li><div><b>Actualizar los conteos en PROJECT_STATUS.md</b><p>Cambio de dos líneas; mantiene el documento como referencia confiable.</p></div></li>
+    </ol>
+  </section>
+
+  <footer>Fuente: docs/PROJECT_STATUS.md, <span class="mono">pytest -q</span> (477 passed, 2 skipped), <span class="mono">npm test</span> (30/30), <span class="mono">npm run lint</span>, <span class="mono">git diff --stat</span>, conteo de líneas de backend/*.py y frontend/, graphify-out/GRAPH_REPORT.md — snapshot local del 2026‑10‑27.</footer>
+</div>

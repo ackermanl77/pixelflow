@@ -101,6 +101,9 @@ UPSCALE_MODEL_DIR = MODELS_DIR / "upscale_models"
 DIFFUSION_MODEL_DIR = MODELS_DIR / "diffusion_models"
 TEXT_ENCODER_DIR = MODELS_DIR / "text_encoders"
 VAE_DIR = MODELS_DIR / "vae"
+# IP-Adapter (B20): the adapters and the CLIP vision image encoders they use.
+IPADAPTER_DIR = MODELS_DIR / "ipadapter"
+CLIP_VISION_DIR = MODELS_DIR / "clip_vision"
 # Finished prompts, one JSON object per line (see engine/queue.py).
 HISTORY_PATH = ROOT_DIR / "history.jsonl"
 # The output cache's copy on disk (engine.disk_cache): the last run's node outputs.
@@ -117,7 +120,8 @@ def ensure_data_dirs() -> None:
     """Create the data folders. Failures are logged, not raised: a
     read-only location must not stop the server from starting."""
     for folder in (OUTPUT_DIR, UPLOAD_DIR, WORKFLOW_DIR, TEMP_DIR, CHECKPOINT_DIR, LORA_DIR, EMBEDDING_DIR, CONTROLNET_DIR,
-                   UPSCALE_MODEL_DIR, DIFFUSION_MODEL_DIR, TEXT_ENCODER_DIR, VAE_DIR, WILDCARD_DIR, CUSTOM_NODES_DIR):
+                   UPSCALE_MODEL_DIR, DIFFUSION_MODEL_DIR, TEXT_ENCODER_DIR, VAE_DIR, IPADAPTER_DIR, CLIP_VISION_DIR,
+                   WILDCARD_DIR, CUSTOM_NODES_DIR):
         try:
             folder.mkdir(parents=True, exist_ok=True)
         except OSError:

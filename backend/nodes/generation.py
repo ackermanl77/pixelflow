@@ -8,7 +8,7 @@ from collections import OrderedDict
 
 from PIL import Image
 
-from . import controlnet, embeddings, latent_preview, models, prompt_weights, runtime, wildcards
+from . import controlnet, embeddings, ip_adapter, latent_preview, models, prompt_weights, runtime, wildcards
 from .base import NodeBase, as_image_list, first_image, register_node
 from .io_nodes import MODEL_INFO_KEY, NODE_INFO_KEY, SEED_INFO_KEY
 
@@ -284,15 +284,21 @@ def _snap8(size):
     return max(8, (width // 8) * 8), max(8, (height // 8) * 8)
 
 
-def make_scheduler(pipe, sampler: str, schedule: str = "normal", base_config=None):
+def make_scheduler(pipe, sampler: str, schedule: str = "normal", base_config=None, base_class=None):
     """A fresh scheduler for this run, always derived from the checkpoint's
     *own* scheduler config (kept when it was loaded), never from whatever a
     previous run swapped in - so options like karras don't leak between
-    runs that share the cached pipeline."""
+    runs that share the cached pipeline. A flow-matching model (Flux, SD3,
+    Z-Image: `base_class` FlowMatch...) keeps its own scheduler class: the
+    samplers in SCHEDULERS are for noise-prediction models only."""
     import diffusers
 
     config = dict(base_config or getattr(pipe.scheduler, "config", {}) or {})
     class_name = SCHEDULERS.get(sampler)
+    if base_class and str(base_class).startswith("FlowMatch"):
+        if sampler != "euler":
+            logger.info("%s is a flow-matching model; sampler '%s' ignored", type(pipe).__name__, sampler)
+        class_name = base_class
     scheduler_cls = getattr(diffusers, class_name) if class_name else type(pipe.scheduler)
     overrides = {}
     if schedule == "karras":
@@ -510,8 +516,10 @@ def _run_diffusion(
     .info so Save Image can embed it."""
     torch = runtime.torch()
     meta = models.pipeline_meta((model or {}).get("pipeline")) or models.pipeline_meta(pipe)
-    pipe.scheduler = make_scheduler(pipe, sampler, schedule, meta.get("scheduler_config"))
+    pipe.scheduler = make_scheduler(pipe, sampler, schedule, meta.get("scheduler_config"), meta.get("scheduler_class"))
     apply_loras((model or {}).get("pipeline", pipe), (model or {}).get("loras", []))
+    # B20: exactly this MODEL's IP-Adapter (or none) on the shared UNet, and its image argument.
+    call_kwargs = {**call_kwargs, **ip_adapter.activate(pipe, (model or {}).get("ip_adapter"))}
 
     seed = int(seed)
     if seed < 0:

@@ -2,6 +2,12 @@
 // reroute/primitive nodes and the mask editor. Same test-mode backend as smoke.spec.js.
 const { test, expect } = require("@playwright/test");
 
+/** Click a topbar command that lives in a menu (UI4): open its menu first. */
+async function menuClick(page, selector) {
+  await page.locator(".menu").filter({ has: page.locator(selector) }).locator(".menu-button").click();
+  await page.click(selector);
+}
+
 // The page's own globals, used inside page.evaluate() callbacks (they run in the browser).
 /* global CLIENT_ID, queueState, galleryItems */
 
@@ -20,10 +26,14 @@ test("templates: every one builds its graph, wired as its file says", async ({ p
   const { templates } = await (await request.get("/templates/index.json")).json();
   for (const template of templates) {
     const spec = await (await request.get(`/templates/${template.file}`)).json();
-    await page.click("#btn-templates");
+    await menuClick(page, "#btn-templates");
     await expect(page.locator("#template-overlay")).toBeVisible();
     await page.locator(`.template-item[data-file="${template.file}"]`).click();
-    // A dirty graph asks first (the app's own modal).
+    // A dirty graph asks first (the app's own modal), which can open a moment after the click:
+    // wait for either outcome -- the question, or the template dialog closing -- before checking.
+    await page.waitForFunction(() =>
+      document.getElementById("template-overlay").classList.contains("hidden") ||
+      !document.getElementById("modal-overlay").classList.contains("hidden"));
     const confirm = page.locator("#modal-overlay:not(.hidden) .primary");
     if (await confirm.count()) await confirm.click();
     await expect(page.locator("#template-overlay")).toBeHidden();
@@ -34,7 +44,7 @@ test("templates: every one builds its graph, wired as its file says", async ({ p
     expect(Object.keys(prompt).length, template.file).toBe(spec.nodes.length);
   }
   // Load Example is the text-to-image template.
-  await page.click("#btn-example");
+  await menuClick(page, "#btn-example");
   const confirm = page.locator("#modal-overlay:not(.hidden) .primary");
   if (await confirm.count()) await confirm.click();
   await expect.poll(() => page.evaluate(() => graph._nodes.map((n) => n.comfyClass).join(","))).toBe(
@@ -43,7 +53,7 @@ test("templates: every one builds its graph, wired as its file says", async ({ p
 });
 
 test("groups: Ctrl+G wraps the selection, and the group menu mutes and bypasses it", async ({ page }) => {
-  await page.click("#btn-example");
+  await menuClick(page, "#btn-example");
   await expect.poll(() => page.evaluate(() => graph._nodes.length)).toBe(5);
   await page.evaluate(() => {
     const picked = graph._nodes.filter((n) => ["CLIPTextEncode", "EmptyImage"].includes(n.comfyClass));
@@ -222,7 +232,7 @@ test("X/Y plot: a 2x2 grid runs for real and its contact sheet opens", async ({ 
     const save = addNodeToGraph("SaveImage", [420, 100]);
     empty.connect(0, save, findInputSlot(save, "image"));
   });
-  await page.click("#btn-xy");
+  await menuClick(page, "#btn-xy");
   await expect(page.locator("#xy-overlay")).toBeVisible();
   const emptyId = await page.evaluate(() => String(graph._nodes.find((n) => n.comfyClass === "EmptyImage").id));
   await page.selectOption("#xy-x-node", emptyId);

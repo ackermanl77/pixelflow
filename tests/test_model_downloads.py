@@ -29,7 +29,7 @@ def _head(status=302, headers=None, seen=None):
 
 
 def test_a_hugging_face_file_page_resolves_to_its_lfs_file_and_hash(monkeypatch):
-    monkeypatch.setenv("HF_TOKEN", "hf_secret")
+    monkeypatch.setenv("HF_TOKEN", "test-token-hf")
     seen = []
     plan = md.resolve(
         "https://huggingface.co/acme/style-lora/blob/main/folder/My%20Style.safetensors",
@@ -37,7 +37,7 @@ def test_a_hugging_face_file_page_resolves_to_its_lfs_file_and_hash(monkeypatch)
     )
     assert plan.url == "https://huggingface.co/acme/style-lora/resolve/main/folder/My%20Style.safetensors"
     assert (plan.filename, plan.kind, plan.sha256, plan.size) == ("My_Style.safetensors", "loras", SHA, 1234)
-    assert seen[0][1] == {"Authorization": "Bearer hf_secret"}
+    assert seen[0][1] == {"Authorization": "Bearer test-token-hf"}
 
 
 @pytest.mark.parametrize("path, kind", [
@@ -76,7 +76,7 @@ CIVITAI_VERSION = {
 
 
 def test_a_civitai_page_uses_the_versions_primary_file_type_and_hash(monkeypatch):
-    monkeypatch.setenv("CIVITAI_TOKEN", "civ")
+    monkeypatch.setenv("CIVITAI_TOKEN", "test-token-civitai")
     fetched = []
 
     def fetch(url):
@@ -87,7 +87,7 @@ def test_a_civitai_page_uses_the_versions_primary_file_type_and_hash(monkeypatch
     assert fetched == ["https://civitai.com/api/v1/models/111"]
     assert (plan.filename, plan.kind, plan.sha256, plan.size) == ("ink-v2.safetensors", "loras", SHA, 2560)
     assert plan.url == "https://civitai.com/api/download/models/222"
-    assert plan.headers == {"Authorization": "Bearer civ"}
+    assert plan.headers == {"Authorization": "Bearer test-token-civitai"}
     md.resolve("https://civitai.com/models/111?modelVersionId=222", fetch_json=fetch)
     md.resolve("https://civitai.com/api/download/models/222", fetch_json=fetch)
     assert fetched[1:] == ["https://civitai.com/api/v1/model-versions/222"] * 2
