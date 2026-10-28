@@ -11,7 +11,7 @@ diffusers>=0.35,<0.41
 transformers>=4.46,<6
 accelerate>=1.0,<2
 safetensors>=0.4
-huggingface_hub>=0.30
+huggingface_hub>=2.3.0
 # LoRA support (Load LoRA node). Optional at runtime: without it, graphs
 # without LoRAs still work and a LoRA node reports a clear error.
 peft>=0.13
