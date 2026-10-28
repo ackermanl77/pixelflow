@@ -3155,6 +3155,25 @@ async function main() {
   updateEmptyState();
   refreshSystemStatus();
   setInterval(refreshSystemStatus, 10000);
+  // The server checks for a newer release once, in the background (backend/update_check.py);
+  // with no feed configured /api/update is always {}.
+  setTimeout(showAvailableUpdate, 8000);
+}
+
+async function showAvailableUpdate() {
+  let info = {};
+  try {
+    const res = await fetch("/api/update");
+    if (res.ok) info = await res.json();
+  } catch (_) { /* offline or server gone: say nothing */ }
+  if (!info.version) return;
+  const toast = showToast(`PixelFlow ${info.version} is available.${info.notes ? ` ${info.notes}` : ""}`, "info", 0);
+  const link = document.createElement("a");
+  link.href = info.url;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = "Download";
+  toast.insertBefore(link, toast.lastChild);
 }
 
 main();

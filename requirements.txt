@@ -1,6 +1,6 @@
-fastapi==0.115.*
+fastapi==0.162.*
 uvicorn[standard]==0.32.*
-pillow>=11,<13
+pillow>=13,<14
 # Canny Edges (image_ops.CannyEdges); also a dependency of torch/diffusers.
 numpy>=1.26
 python-multipart==0.0.*

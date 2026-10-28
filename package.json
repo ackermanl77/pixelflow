@@ -2,7 +2,7 @@
   "name": "pixelflow-frontend-dev",
   "private": true,
   "description": "Dev-only tooling for PixelFlow's frontend (lint, unit tests, browser smoke test). Nothing here ships: the app serves frontend/ as plain files.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "scripts": {
     "test": "node --test \"tests/js/*.test.js\"",
     "lint": "eslint .",

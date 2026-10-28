@@ -177,6 +177,14 @@ model loading, a throwaway data folder in the temp directory) through
 `tests/e2e/server.py`; it uses `.venv`'s Python, or `PIXELFLOW_PYTHON`. CI
 runs all three in a separate `frontend` job.
 
+## Privacy
+
+Prompts, images and workflows stay on your computer; generation runs locally. PixelFlow
+connects to the internet only to download models: the Hugging Face or Civitai links and Hub
+ids you enter, and the Remove Background model the first time you use it. Those downloads go
+straight to the host (Hugging Face sees your IP address and, if you set one, your access
+token). A release may switch on the update check: once per launch it downloads a small version file from the release site and sends nothing but the app's name and version. There is no telemetry.
+
 ## Security
 
 The server binds to `127.0.0.1` and additionally rejects requests whose

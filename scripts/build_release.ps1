@@ -192,6 +192,9 @@ sys.exit(0 if (major, minor) >= (12, 8) else 4)
     $VersionFile = Join-Path $ProjectRoot "backend\_version.py"
     [System.IO.File]::WriteAllText($VersionFile, "__version__ = `"$Version`"`n", (New-Object System.Text.UTF8Encoding $false))
     try {
+        # THIRD_PARTY_NOTICES.md lists the packages actually being bundled; the spec ships it.
+        & $BuildPython scripts\third_party_notices.py
+        if ($LASTEXITCODE -ne 0) { throw "Writing THIRD_PARTY_NOTICES.md failed (exit code $LASTEXITCODE)." }
         & $BuildPython -m PyInstaller --noconfirm --distpath $Dist --workpath $Build PixelFlow.spec
         if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit code $LASTEXITCODE)." }
     } finally {

@@ -192,3 +192,27 @@ def test_pending_prompt_can_be_deleted(client, fresh_queue):
     prompt_id = client.post("/api/queue", json={"prompt": VALID_PROMPT}).json()["prompt_id"]
     assert client.delete(f"/api/queue/{prompt_id}").status_code == 200
     assert fresh_queue.history[prompt_id]["status"] == "cancelled"
+
+
+def test_update_reports_a_found_release_only(client, monkeypatch):
+    from backend import update_check
+
+    assert client.get("/api/update").json() == {}
+    monkeypatch.setattr(main, "_found_update", update_check.UpdateInfo("9.0.0", "https://example.com/get", "Faster"))
+    assert client.get("/api/update").json() == {"version": "9.0.0", "url": "https://example.com/get", "notes": "Faster"}
+
+
+def test_uncaught_exceptions_from_threads_are_logged(monkeypatch, caplog):
+    import sys
+    import threading
+
+    from backend.logging_setup import install_excepthooks
+
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    monkeypatch.setattr(threading, "excepthook", threading.excepthook)
+    install_excepthooks()
+    worker = threading.Thread(target=lambda: 1 / 0)
+    with caplog.at_level("CRITICAL", logger="pixelflow"):
+        worker.start()
+        worker.join()
+    assert any(record.exc_info and record.exc_info[0] is ZeroDivisionError for record in caplog.records)

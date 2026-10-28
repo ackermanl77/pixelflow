@@ -253,9 +253,10 @@ def main() -> int | None:
         return mcp_server.main()
     # Before anything else, so even an import failure of the backend in the
     # frozen app lands in logs/pixelflow.log (the build has no console).
-    from backend.logging_setup import setup_logging
+    from backend.logging_setup import install_excepthooks, setup_logging
 
     setup_logging()
+    install_excepthooks()
     port, own_server = choose_port(PORT)
     thread = None
     if own_server:

@@ -98,3 +98,16 @@ jobs:
             playwright-report/
             test-results/
           if-no-files-found: ignore
+
+  audit:
+    # Known vulnerabilities in the pinned/required Python packages (OSV / PyPI advisory data).
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: pip-audit
+        run: |
+          python -m pip install pip-audit==2.10.1
+          python -m pip_audit -r requirements-lock.txt --progress-spinner off

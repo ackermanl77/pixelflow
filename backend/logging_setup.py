@@ -9,6 +9,7 @@ a rotating file, logs/pixelflow.log next to the other user data."""
 import logging
 import logging.handlers
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -67,6 +68,22 @@ def remove_logging_handlers() -> None:
     for handler in [h for h in root.handlers if getattr(h, _HANDLER_MARKER, False)]:
         root.removeHandler(handler)
         handler.close()
+
+
+def install_excepthooks() -> None:
+    """Log uncaught exceptions from the main thread and from any other thread: the
+    packaged app has no console, so their tracebacks would otherwise be lost."""
+    log = logging.getLogger("pixelflow")
+
+    def hook(exc_type, exc_value, exc_traceback) -> None:
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        log.critical("uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+    sys.excepthook = hook
+    threading.excepthook = lambda args: (
+        None if args.exc_type is SystemExit else hook(args.exc_type, args.exc_value, args.exc_traceback))
 
 
 def log_runtime_info(logger: logging.Logger) -> None:

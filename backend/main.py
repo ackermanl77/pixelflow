@@ -18,7 +18,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import contact_sheet, model_downloads, paths, plugins
+from . import contact_sheet, model_downloads, paths, plugins, update_check
 from .config import APP_ID, app_version, test_mode
 from .engine.graph import PromptValidationError, validate_prompt
 from .engine.queue import ConnectionManager, ExecutionQueue
@@ -110,6 +110,8 @@ async def lifespan(_app: FastAPI):
         # torch/diffusers load in the background (report item P6): the UI is
         # usable right away and the first prompt doesn't pay for the import.
         runtime.warm_up_in_background(lambda: log_runtime_info(logger))
+    # Does nothing until update_check.UPDATE_FEED_URL is set; /api/update reports the result.
+    update_check.check_in_background(app_version(), _remember_update)
     yield
 
 
@@ -185,6 +187,21 @@ def _node_info() -> dict:
 @app.get("/api/health")
 async def health():
     return {"app": APP_ID, "status": "ok", "version": app_version()}
+
+
+_found_update: Optional[update_check.UpdateInfo] = None
+
+
+def _remember_update(info: update_check.UpdateInfo) -> None:
+    global _found_update
+    _found_update = info
+
+
+@app.get("/api/update")
+async def update():
+    """A newer release found by the once-per-launch check (backend/update_check.py), or {}."""
+    info = _found_update
+    return {} if info is None else {"version": info.version, "url": info.url, "notes": info.notes}
 
 
 @app.get("/api/nodes")

@@ -15,7 +15,8 @@ import windows_resources  # noqa: E402
 VERSION_PATH = windows_resources.write_version_file(workpath)
 MANIFEST_PATH = windows_resources.write_manifest(workpath)
 
-datas = [("frontend", "frontend")]
+# The license and third-party notices travel with every build (scripts/third_party_notices.py).
+datas = [("frontend", "frontend"), ("LICENSE", "."), ("THIRD_PARTY_NOTICES.md", ".")]
 binaries = []
 hiddenimports = ["backend.main"]
 hiddenimports += collect_submodules("backend")
