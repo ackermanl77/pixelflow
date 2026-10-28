@@ -46,7 +46,7 @@ jobs:
 
       # Cache the tiny test checkpoint (hf-internal-testing/tiny-stable-diffusion-torch) the
       # real-pipeline tests download.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/huggingface
           key: hf-tiny-sd-v1-${{ runner.os }}
