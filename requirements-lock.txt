@@ -49,7 +49,7 @@ pyinstaller==6.22.3
 python-dotenv==1.2.3
 python-multipart==0.0.32
 pythonnet==3.2.0
-pywebview==5.4
+pywebview==6.2.1
 pywin32-ctypes==0.2.3
 PyYAML==6.0.3
 regex==2026.9.29
