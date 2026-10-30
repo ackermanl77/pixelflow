@@ -27,6 +27,9 @@ let historyTimer = null;
 // Unsaved-changes tracking (F7): the snapshot of the last save/load.
 let savedSnapshot = null;
 let currentWorkflowName = "";
+// What an unsaved graph was loaded from (a template title, a file name): the tab's label until
+// it is saved under a name (UI10). Never used as the save name.
+let currentTabHint = "";
 
 // ---- Widgets ----
 
@@ -95,10 +98,165 @@ function addPropertyWidget(node, name, spec) {
 
   // STRING
   node.properties[name] = config.default ?? "";
+  if (config.multiline) {
+    addPromptWidget(node, name);
+    return;
+  }
   node.addWidget("text", name, node.properties[name], (v) => {
     node.properties[name] = v;
     scheduleHistoryPush();
-  }, { multiline: !!config.multiline });
+  }, { multiline: false });
+}
+
+// ---- Multi-line prompt boxes drawn on the node (UI11) ----
+// A STRING marked multiline is a box on the node showing its wrapped text: it grows with the text
+// (Logic.PROMPT_BOX: 3 to 10 lines), then scrolls inside with the mouse wheel. A click opens a
+// textarea right over it; leaving it (or Ctrl+Enter) keeps the text, Esc puts the old text back.
+const PROMPT_FONT = "13px sans-serif";
+const promptMeasure = document.createElement("canvas").getContext("2d");
+promptMeasure.font = PROMPT_FONT;
+let promptEditor = null; // { textarea, node, widget, before }
+
+function addPromptWidget(node, name) {
+  const box = Logic.PROMPT_BOX;
+  const widget = {
+    type: "prompt", name, value: node.properties[name], options: { multiline: true }, scroll: 0,
+    callback(v) {
+      node.properties[name] = v;
+      scheduleHistoryPush();
+    },
+    wrapped(width) {
+      const key = `${width}\u0000${this.value}`;
+      if (this._wrapKey !== key) {
+        this._wrapKey = key;
+        this._lines = Logic.wrapPromptLines(this.value, width - 12 - 2 * box.padding, (t) => promptMeasure.measureText(t).width);
+      }
+      return this._lines;
+    },
+    computeSize(width) {
+      return [width, Logic.promptBoxHeight(this.wrapped(width).length)];
+    },
+    draw(ctx, drawnNode, width, y, _height) {
+      const lines = this.wrapped(width);
+      const height = Logic.promptBoxHeight(lines.length);
+      const { max, scroll } = Logic.promptScroll(lines.length, this.scroll);
+      this.scroll = scroll;
+      ctx.save();
+      ctx.font = "11px sans-serif";
+      ctx.fillStyle = LiteGraph.WIDGET_SECONDARY_TEXT_COLOR;
+      ctx.textAlign = "left";
+      ctx.fillText(this.label || this.name, 8, y + 10);
+      const top = y + box.labelHeight, boxHeight = height - box.labelHeight;
+      ctx.fillStyle = LiteGraph.WIDGET_BGCOLOR;
+      ctx.strokeStyle = LiteGraph.WIDGET_OUTLINE_COLOR;
+      ctx.beginPath();
+      ctx.roundRect(6, top, width - 12, boxHeight, 4);
+      ctx.fill();
+      ctx.stroke();
+      if (promptEditor && promptEditor.widget === this) { ctx.restore(); return; } // the textarea covers it
+      ctx.beginPath();
+      ctx.rect(6, top + 1, width - 12, boxHeight - 2);
+      ctx.clip();
+      ctx.font = PROMPT_FONT;
+      ctx.textBaseline = "top";
+      const empty = !String(this.value || "").length;
+      ctx.fillStyle = empty ? LiteGraph.WIDGET_SECONDARY_TEXT_COLOR : LiteGraph.WIDGET_TEXT_COLOR;
+      const shown = empty ? ["Click to type..."] : lines;
+      shown.forEach((line, i) => ctx.fillText(line, 6 + box.padding, top + box.padding + i * box.lineHeight - scroll));
+      if (max > 0) { // a scrollbar thumb on the right edge
+        const track = boxHeight - 4, thumb = Math.max(14, track * (track / (track + max)));
+        ctx.fillStyle = LiteGraph.WIDGET_OUTLINE_COLOR;
+        ctx.fillRect(width - 10, top + 2 + (track - thumb) * (scroll / max), 3, thumb);
+      }
+      ctx.restore();
+    },
+    mouse(event, pos, clickedNode) {
+      if (pos[1] - this.last_y < box.labelHeight) return false; // the label row
+      // On release: litegraph refocuses the canvas after a press, which would blur the textarea.
+      if (String(event.type).endsWith("up")) setTimeout(() => openPromptEditor(clickedNode, this), 0);
+      return true;
+    },
+  };
+  node.addCustomWidget(widget);
+  return widget;
+}
+
+function openPromptEditor(node, widget) {
+  closePromptEditor(true);
+  const textarea = document.createElement("textarea");
+  textarea.className = "prompt-editor";
+  textarea.setAttribute("aria-label", `${widget.name} (${node.title})`);
+  textarea.value = widget.value ?? "";
+  document.body.appendChild(textarea);
+  promptEditor = { textarea, node, widget, before: widget.value ?? "" };
+  placePromptEditor();
+  textarea.addEventListener("keydown", (e) => {
+    e.stopPropagation(); // typing here never fires canvas shortcuts
+    if (e.key === "Escape") { e.preventDefault(); closePromptEditor(false); }
+    else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); closePromptEditor(true); }
+  });
+  textarea.addEventListener("input", () => { widget.value = textarea.value; canvas.setDirty(true, true); });
+  textarea.addEventListener("blur", () => closePromptEditor(true));
+  textarea.focus();
+  canvas.setDirty(true, true);
+}
+
+/** Keeps the textarea on its box while the canvas pans and zooms. */
+function placePromptEditor() {
+  if (!promptEditor) return;
+  const { textarea, node, widget } = promptEditor;
+  const box = Logic.PROMPT_BOX;
+  const width = node.size[0];
+  const height = Logic.promptBoxHeight(widget.wrapped(width).length) - box.labelHeight;
+  const rect = canvas.canvas.getBoundingClientRect();
+  const [x, y] = canvas.ds.convertOffsetToCanvas([node.pos[0] + 6, node.pos[1] + widget.last_y + box.labelHeight]);
+  const scale = canvas.ds.scale;
+  Object.assign(textarea.style, {
+    left: `${rect.left + x}px`, top: `${rect.top + y}px`,
+    width: `${(width - 12) * scale}px`, height: `${height * scale}px`,
+    fontSize: `${13 * scale}px`, lineHeight: `${box.lineHeight * scale}px`, padding: `${box.padding * scale}px`,
+    display: graph._nodes.includes(node) ? "block" : "none",
+  });
+}
+
+function closePromptEditor(keep) {
+  if (!promptEditor) return;
+  const { textarea, node, widget, before } = promptEditor;
+  promptEditor = null;
+  textarea.remove();
+  const value = keep ? textarea.value : before;
+  widget.value = value;
+  if (value !== before) widget.callback(value);
+  node.setSize([node.size[0], Math.max(node.size[1], node.computeSize()[1])]);
+  fitPromptNode(node);
+  canvas.setDirty(true, true);
+}
+
+/** A node grows (or shrinks back) to fit its prompt boxes' heights. */
+function fitPromptNode(node) {
+  if ((node.widgets || []).some((w) => w.type === "prompt")) node.setSize([node.size[0], node.computeSize()[1]]);
+}
+
+/** The mouse wheel over a prompt box with more text than fits scrolls the box, not the canvas. */
+function promptWheel(e) {
+  if (e.ctrlKey) return;
+  const rect = canvas.canvas.getBoundingClientRect();
+  const [gx, gy] = canvas.ds.convertCanvasToOffset([e.clientX - rect.left, e.clientY - rect.top]);
+  const node = graph.getNodeOnPos(gx, gy);
+  if (!node || !node.widgets) return;
+  const localY = gy - node.pos[1];
+  for (const widget of node.widgets) {
+    if (widget.type !== "prompt" || widget.last_y === undefined) continue;
+    const lines = widget.wrapped(node.size[0]);
+    if (localY < widget.last_y || localY > widget.last_y + Logic.promptBoxHeight(lines.length)) continue;
+    const { max } = Logic.promptScroll(lines.length, 0);
+    if (!max) return;
+    widget.scroll = Logic.promptScroll(lines.length, widget.scroll + Math.sign(e.deltaY) * Logic.PROMPT_BOX.lineHeight * 3).scroll;
+    e.preventDefault();
+    e.stopPropagation();
+    canvas.setDirty(true, true);
+    return;
+  }
 }
 
 // Seed "control after generate" (F11): what happens to the seed after each queue.
@@ -316,7 +474,7 @@ function drawNodeError(node, ctx) {
 }
 
 function markNodeError(nodeId, message, input) {
-  const node = nodeId != null ? graph.getNodeById(Number(nodeId)) : null;
+  const node = nodeId != null ? promptNode(nodeId, false) : null;
   if (!node) return false;
   nodeErrors.set(node.id, { message, input });
   canvas.centerOnNode(node);
@@ -384,6 +542,8 @@ function makeNodeClass(nodeName, def) {
       ...(this.comfyClass === "LoadImage" ? [null, { content: "Open in mask editor", callback: () => openMaskEditor(this) }] : []),
       ...widgetConversionOptions(this),
       ...appModeOptions(this),
+      null,
+      { content: "Convert selection to subgraph", callback: () => convertToSubgraph(selectedNodes().length ? selectedNodes() : [this]) },
     ];
   };
   NodeCtor.prototype.onConfigure = function () {
@@ -391,6 +551,7 @@ function makeNodeClass(nodeName, def) {
     // sockets came back with the saved inputs; the widgets came from the constructor).
     for (const name of this.properties[CONVERTED_PROPERTY] || []) hideWidget(this, name);
     fitNodeWidth(this);
+    fitPromptNode(this);
   };
   return NodeCtor;
 }
@@ -636,10 +797,106 @@ function addNodeToGraph(nodeName, pos) {
     (-view.offset[1] + canvas.canvas.height / 2) / view.scale,
   ];
   node.pos = center;
-  graph.add(node);
+  canvas.graph.add(node); // the open subgraph (UI12), or the graph
   scheduleHistoryPush();
   updateEmptyState();
   return node;
+}
+
+// ---- Model Library panel (UI13) ----
+
+const MODEL_MIME = "application/x-pixelflow-model";
+let modelLibrary = null; // GET /api/model-library, loaded when the Models tab first opens
+
+function showSidebarTab(tab) {
+  for (const [name, panel] of [["nodes", "sidebar-nodes"], ["models", "sidebar-models"]]) {
+    const button = document.getElementById(`tab-${name}`);
+    button.setAttribute("aria-selected", String(name === tab));
+    button.tabIndex = name === tab ? 0 : -1;
+    document.getElementById(panel).hidden = name !== tab;
+  }
+  if (tab === "models" && !modelLibrary) loadModelLibrary();
+}
+
+async function loadModelLibrary() {
+  const empty = document.getElementById("model-list-empty");
+  try {
+    const res = await fetch("/api/model-library");
+    if (!res.ok) throw new Error((await errorFromResponse(res)).message);
+    modelLibrary = await res.json();
+  } catch (err) {
+    modelLibrary = null;
+    document.getElementById("model-list").innerHTML = "";
+    empty.textContent = `Couldn't list the models: ${err.message}`;
+    empty.classList.remove("hidden");
+    return;
+  }
+  renderModelLibrary();
+}
+
+/** The loader for a library model, placed at `pos` (or the view's centre), with the model chosen. */
+function addModelLoader(model, pos) {
+  if (!registeredType[model.node]) return null;
+  const node = addNodeToGraph(model.node, pos);
+  setNodeValue(node, model.input, model.name);
+  scheduleHistoryPush();
+  canvas.setDirty(true, true);
+  return node;
+}
+
+function renderModelLibrary() {
+  const list = document.getElementById("model-list");
+  const empty = document.getElementById("model-list-empty");
+  list.innerHTML = "";
+  const query = document.getElementById("model-search").value;
+  const groups = Logic.filterModelLibrary(modelLibrary, query);
+  for (const group of groups) {
+    const section = document.createElement("div");
+    section.className = "category-group";
+    const title = document.createElement("h3");
+    title.className = "category-title";
+    title.textContent = `${group.label} (${group.items.length})`;
+    section.appendChild(title);
+    for (const item of group.items) {
+      const model = { node: group.node, input: group.input, name: item.name };
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "model-item";
+      card.draggable = true;
+      card.title = `${item.name}\nClick or drag onto the canvas: a ${nodeDefs[group.node]?.display_name || group.node} with it`;
+      const thumb = document.createElement(item.preview ? "img" : "span");
+      thumb.className = "model-thumb";
+      if (item.preview) {
+        thumb.src = `/api/model-library/preview?kind=${encodeURIComponent(group.kind)}&name=${encodeURIComponent(item.name)}`;
+        thumb.alt = "";
+        thumb.loading = "lazy";
+      } else {
+        thumb.textContent = group.label.slice(0, 2);
+        thumb.setAttribute("aria-hidden", "true");
+      }
+      const text = document.createElement("span");
+      text.className = "model-text";
+      const name = document.createElement("span");
+      name.className = "model-name";
+      name.textContent = Logic.modelDisplayName(item.name);
+      const size = document.createElement("span");
+      size.className = "model-size";
+      size.textContent = item.size == null ? "Hugging Face" : Logic.formatBytes(item.size);
+      text.append(name, size);
+      card.append(thumb, text);
+      card.onclick = () => addModelLoader(model);
+      card.addEventListener("dragstart", (e) => {
+        e.dataTransfer.setData(MODEL_MIME, JSON.stringify(model));
+        e.dataTransfer.effectAllowed = "copy";
+      });
+      section.appendChild(card);
+    }
+    list.appendChild(section);
+  }
+  const total = Object.values(modelLibrary || {}).reduce((n, g) => n + g.items.length, 0);
+  empty.textContent = total ? "No models match your search."
+    : "No models installed yet. Put them in models/checkpoints, loras, vae or controlnet, or download one (View > System).";
+  empty.classList.toggle("hidden", groups.length > 0);
 }
 
 function updateEmptyState() {
@@ -936,6 +1193,7 @@ function initCanvasToolbar() {
       reset.setAttribute("aria-label", `Zoom ${label}; click for 100%`);
     }
     scheduleMinimap();
+    placePromptEditor(); // the prompt textarea (UI11) follows its box as the view moves
   };
   const saved = loadCanvasView();
   setMinimapVisible(saved.minimap === true);
@@ -980,21 +1238,144 @@ function fitView() {
 // ---- Prompt building (graph -> ComfyUI-style execution prompt; F12 mute/bypass) ----
 
 function buildPrompt() {
-  const nodes = graph._nodes.map((node) => ({
-    id: node.id,
-    mode: node.mode,
-    comfyClass: nodeAliases[node.comfyClass] || node.comfyClass,
-    properties: node.properties,
-    inputs: (node.inputs || []).map((inp) => ({ name: inp.name, type: inp.type, link: inp.link })),
-    outputs: (node.outputs || []).map((out) => ({ type: out.type })),
+  const flat = Logic.flattenSubgraphs(plainGraph(graph)); // subgraphs (UI12) are inlined first
+  return Logic.buildPrompt(flat.nodes, flat.links);
+}
+
+/** A live LGraph (and its subgraphs) as the plain data Logic.flattenSubgraphs takes. */
+function plainGraph(g) {
+  const kinds = { "graph/subgraph": "subgraph", "graph/input": "input", "graph/output": "output" };
+  return {
+    nodes: g._nodes.map((node) => ({
+      id: node.id,
+      mode: node.mode,
+      kind: kinds[node.type] || "node",
+      name: node.properties && node.properties.name,
+      comfyClass: nodeAliases[node.comfyClass] || node.comfyClass,
+      properties: node.properties,
+      inputs: (node.inputs || []).map((inp) => ({ name: inp.name, type: inp.type, link: inp.link })),
+      outputs: (node.outputs || []).map((out) => ({ name: out.name, type: out.type })),
+      subgraph: node.subgraph ? plainGraph(node.subgraph) : undefined,
+    })),
+    links: g.links,
+  };
+}
+
+/** Every node, those inside subgraphs too. */
+function allNodes(g = graph) {
+  return g._nodes.flatMap((node) => [node, ...(node.subgraph ? allNodes(node.subgraph) : [])]);
+}
+
+/** The canvas node a /prompt id names: "7:3" is node 3 inside subgraph node 7. `inner` false
+ *  gives the top-level node (the subgraph node), for errors and progress the user can see. */
+function promptNode(id, inner = true) {
+  const path = String(id).split(":").map(Number);
+  let g = graph, node = null;
+  for (const part of inner ? path : path.slice(0, 1)) {
+    node = g ? g.getNodeById(part) : null;
+    g = node && node.subgraph;
+  }
+  return node;
+}
+
+// ---- Subgraphs (UI12): a selection becomes one node; open it in place, Esc back out ----
+
+function convertToSubgraph(selection) {
+  const g = canvas.graph;
+  const picked = selection.filter((n) => n.graph === g && !["graph/input", "graph/output"].includes(n.type));
+  if (!picked.length) return null;
+  const ids = new Set(picked.map((n) => n.id));
+  const wires = Object.values(g.links || {}).filter(Boolean);
+  const inside = wires.filter((l) => ids.has(l.origin_id) && ids.has(l.target_id));
+  const incoming = wires.filter((l) => !ids.has(l.origin_id) && ids.has(l.target_id));
+  const outgoing = wires.filter((l) => ids.has(l.origin_id) && !ids.has(l.target_id));
+  const key = (l) => `${l.origin_id}/${l.origin_slot}`;
+  const sources = [...new Map(incoming.map((l) => [key(l), l])).values()];
+  const results = [...new Map(outgoing.map((l) => [key(l), l])).values()];
+  const inNames = Logic.uniqueNames(sources.map((l) => g.getNodeById(l.target_id).inputs[l.target_slot].name));
+  const outNames = Logic.uniqueNames(results.map((l) => {
+    const out = g.getNodeById(l.origin_id).outputs[l.origin_slot];
+    return out.label || out.name || String(out.type).toLowerCase();
   }));
-  return Logic.buildPrompt(nodes, graph.links);
+
+  const left = Math.min(...picked.map((n) => n.pos[0])), top = Math.min(...picked.map((n) => n.pos[1]));
+  const right = Math.max(...picked.map((n) => n.pos[0] + n.size[0]));
+  const sub = LiteGraph.createNode("graph/subgraph");
+  sub.title = "Subgraph";
+  // Where the most downstream picked node was: the space the selection leaves, near its wires.
+  sub.pos = picked.reduce((a, b) => (b.pos[0] > a.pos[0] ? b : a)).pos.slice();
+  g.add(sub);
+  const inner = sub.subgraph;
+  const copies = new Map();
+  for (const node of picked) {
+    const data = node.serialize();
+    for (const input of data.inputs || []) input.link = null;
+    for (const output of data.outputs || []) output.links = null;
+    const copy = LiteGraph.createNode(node.type);
+    copy.configure(data);
+    inner.add(copy);
+    copies.set(node.id, copy);
+  }
+  for (const l of inside) copies.get(l.origin_id).connect(l.origin_slot, copies.get(l.target_id), l.target_slot);
+  // A graph input/output node inside; naming it adds the subgraph node's input/output (litegraph).
+  const port = (nodeType, name, valueType, index, x) => {
+    const io = LiteGraph.createNode(nodeType);
+    io.pos = [x, top + index * 120];
+    inner.add(io);
+    io.setProperty("type", valueType);
+    io.setProperty("name", name);
+    return io;
+  };
+  sources.forEach((l, i) => {
+    const io = port("graph/input", inNames[i], l.type, i, left - 220);
+    for (const target of incoming.filter((t) => key(t) === key(l))) io.connect(0, copies.get(target.target_id), target.target_slot);
+  });
+  results.forEach((l, i) => {
+    const io = port("graph/output", outNames[i], l.type, i, right + 60);
+    copies.get(l.origin_id).connect(l.origin_slot, io, 0);
+  });
+  // Outside: the same wires, now to and from the subgraph node.
+  const outerIn = sources.map((l) => [g.getNodeById(l.origin_id), l.origin_slot]);
+  const outerOut = results.map((l) => outgoing.filter((t) => key(t) === key(l)).map((t) => [g.getNodeById(t.target_id), t.target_slot]));
+  for (const node of picked) g.remove(node);
+  outerIn.forEach(([origin, slot], i) => origin && origin.connect(slot, sub, sub.findInputSlot(inNames[i])));
+  outerOut.forEach((targets, i) => {
+    for (const [target, slot] of targets) if (target) sub.connect(sub.findOutputSlot(outNames[i]), target, slot);
+  });
+  sub.setSize(sub.computeSize());
+  canvas.deselectAllNodes();
+  canvas.selectNode(sub);
+  canvas.setDirty(true, true);
+  clearTimeout(historyTimer);
+  pushHistory(); // one undo step now: a Ctrl+Z right after must not go past the conversion
+  return sub;
+}
+
+function openSubgraph(node) {
+  if (!node || !node.subgraph) return;
+  canvas.openSubgraph(node.subgraph);
+}
+
+/** Back out of every open subgraph: before the graph is replaced (undo, load, a new tab). */
+function leaveSubgraphs() {
+  while (canvas && canvas._graph_stack && canvas._graph_stack.length) canvas.closeSubgraph();
+}
+
+/** The bar over the canvas while a subgraph is open: where you are and the way back. */
+function updateSubgraphBar() {
+  const bar = document.getElementById("subgraph-bar");
+  const depth = (canvas._graph_stack || []).length;
+  bar.classList.toggle("hidden", depth === 0);
+  if (!depth) return;
+  const titles = [];
+  for (let g = canvas.graph; g && g._subgraph_node; g = g._subgraph_node.graph) titles.unshift(g._subgraph_node.title);
+  document.getElementById("subgraph-path").textContent = ["Graph", ...titles].join(" › ");
 }
 
 // ---- Queueing (F8, F11) ----
 
 function seedNodes() {
-  return graph._nodes.filter((n) => n.seedInputName && n.mode !== Logic.MODE_MUTE && n.mode !== Logic.MODE_BYPASS);
+  return allNodes().filter((n) => n.seedInputName && n.mode !== Logic.MODE_MUTE && n.mode !== Logic.MODE_BYPASS);
 }
 
 async function queuePrompt({ front = false, count = 1 } = {}) {
@@ -1392,7 +1773,7 @@ function setProgressBar(id, fraction) {
 }
 
 function showNodeStart(msg) {
-  const node = graph.getNodeById(Number(msg.node_id));
+  const node = promptNode(msg.node_id, false);
   Object.assign(progress, {
     nodeIndex: msg.node_index || 0,
     nodeCount: msg.node_count || 0,
@@ -1424,7 +1805,7 @@ function showPreview(msg) {
   const img = document.getElementById("progress-preview");
   img.src = msg.image;
   img.classList.remove("hidden");
-  const node = graph.getNodeById(Number(msg.node_id));
+  const node = promptNode(msg.node_id, false);
   if (node) {
     livePreviews.set(node.id, loadImageForCanvas(msg.image));
     canvas.setDirty(true, false);
@@ -1521,7 +1902,7 @@ async function onExecutionSuccess(msg) {
   if (!mine) return;
   // F13: show each output node's newest image inside the node.
   for (const [nodeId, output] of Object.entries(msg.outputs || {})) {
-    const node = graph.getNodeById(Number(nodeId));
+    const node = promptNode(nodeId);
     if (node && output && output.compare && Array.isArray(output.images) && output.images.length === 2) {
       comparePreviews.set(node.id, output.images.map((name) => loadImageForCanvas(Logic.imageUrl(name, output.type))));
     } else if (node && output && Array.isArray(output.images) && output.images.length) {
@@ -1625,9 +2006,12 @@ function isDirty() {
   return savedSnapshot === null || JSON.stringify(graph.serialize()) !== savedSnapshot;
 }
 
-function markSaved(name) {
+function markSaved(name, hint = "") {
   savedSnapshot = JSON.stringify(graph.serialize());
-  if (name !== undefined) currentWorkflowName = name;
+  if (name !== undefined) {
+    currentWorkflowName = name;
+    currentTabHint = hint;
+  }
   persistTabs();
   renderTabs();
 }
@@ -1662,6 +2046,7 @@ function stashActiveTab() {
     graph: JSON.stringify(graph.serialize()),
     saved: savedSnapshot,
     name: currentWorkflowName,
+    hint: currentTabHint,
     undoStack,
     undoIndex,
     view: { scale: canvas.ds.scale, offset: [...canvas.ds.offset] },
@@ -1671,7 +2056,7 @@ function stashActiveTab() {
 function persistTabs() {
   if (!tabs.length) return; // not restored yet: never overwrite the stored tabs with none
   const tab = activeTab();
-  if (tab) Object.assign(tab, { saved: savedSnapshot, name: currentWorkflowName });
+  if (tab) Object.assign(tab, { saved: savedSnapshot, name: currentWorkflowName, hint: currentTabHint });
   try {
     localStorage.setItem(TABS_STORAGE_KEY, Logic.storeTabs(tabs, activeTabId));
   } catch (_) { /* best effort, like the graph auto-save */ }
@@ -1682,9 +2067,11 @@ function showTab(tab) {
   activeTabId = tab.id;
   suppressHistory = true;
   try {
+    leaveSubgraphs();
     graph.configure(JSON.parse(tab.graph));
   } catch (err) {
     console.warn("could not open the tab's graph", err);
+    leaveSubgraphs();
     graph.clear();
   } finally {
     suppressHistory = false;
@@ -1696,6 +2083,7 @@ function showTab(tab) {
   comparePreviews.clear();
   savedSnapshot = tab.saved;
   currentWorkflowName = tab.name;
+  currentTabHint = tab.hint || "";
   undoStack = tab.undoStack || [tab.graph];
   undoIndex = tab.undoIndex ?? undoStack.length - 1;
   if (tab.view) {
@@ -1751,7 +2139,7 @@ function renderTabs() {
   if (!list || !tabs.length) return;
   const items = tabs.map((tab) => {
     const active = tab.id === activeTabId;
-    const named = active ? { name: currentWorkflowName } : tab;
+    const named = active ? { name: currentWorkflowName, hint: currentTabHint } : tab;
     const dirty = active ? isDirty() : Logic.tabIsDirty(tab);
     const wrap = document.createElement("div");
     wrap.className = `wf-tab${active ? " active" : ""}`;
@@ -1817,9 +2205,11 @@ function restoreSavedGraph() {
   if (!saved) return false;
   try {
     suppressHistory = true;
+    leaveSubgraphs();
     graph.configure(JSON.parse(saved));
   } catch (err) {
     console.warn("could not restore the auto-saved graph", err);
+    leaveSubgraphs();
     graph.clear();
     return false;
   } finally {
@@ -1833,7 +2223,7 @@ function syncWidgetsFromProperties() {
   // graph.configure() restores node.properties from the snapshot but does not
   // reliably refresh each widget's displayed value from it, so widgets can
   // show stale text after undo/redo or loading a workflow. Re-sync explicitly.
-  for (const node of graph._nodes) {
+  for (const node of allNodes()) {
     if (!node.widgets) continue;
     for (const widget of node.widgets) {
       if (widget.name in node.properties) widget.value = node.properties[widget.name];
@@ -1842,12 +2232,14 @@ function syncWidgetsFromProperties() {
       }
     }
     fitNodeWidth(node); // the restored values can be longer than the constructor's defaults
+    fitPromptNode(node);
   }
   canvas.setDirty(true, true);
 }
 
 function restoreSnapshot(snap) {
   suppressHistory = true;
+  leaveSubgraphs();
   graph.configure(JSON.parse(snap));
   suppressHistory = false;
   syncWidgetsFromProperties();
@@ -1975,6 +2367,7 @@ async function replaceGraph(data, question = "Replace the current graph?") {
   }
   try {
     suppressHistory = true;
+    leaveSubgraphs();
     graph.configure(Logic.withoutSavedPrompt(data));
   } catch (err) {
     showToast(`That workflow could not be loaded: ${err.message}`, "error");
@@ -2160,7 +2553,7 @@ async function importFile(file) {
       showToast(`${file.name} has no embedded workflow.`, "error");
       return;
     }
-    if (await replaceGraph(workflow, `Load the workflow embedded in ${file.name}?`)) markSaved("");
+    if (await replaceGraph(workflow, `Load the workflow embedded in ${file.name}?`)) markSaved("", fileTitle(file.name));
     return;
   }
   let data;
@@ -2174,7 +2567,12 @@ async function importFile(file) {
     showToast(`${file.name} is not a PixelFlow / litegraph workflow.`, "error");
     return;
   }
-  if (await replaceGraph(data, `Import ${file.name}?`)) markSaved("");
+  if (await replaceGraph(data, `Import ${file.name}?`)) markSaved("", fileTitle(file.name));
+}
+
+/** A file's name without its extension, as a tab label ("portrait.png" -> "portrait"). */
+function fileTitle(name) {
+  return name.replace(/\.[^.]+$/, "");
 }
 
 function findInputSlot(node, name) {
@@ -2532,7 +2930,7 @@ async function runXyPlot() {
 // readable and independent of litegraph's serialization.
 // With `insert` (F28), the template is added beside the current graph -- a
 // reusable block -- and selected, instead of replacing the graph.
-function buildTemplateGraph(spec, insert = false) {
+function buildTemplateGraph(spec, insert = false, title = "") {
   let offset = [0, 0];
   if (insert && graph._nodes.length) {
     const right = Math.max(...graph._nodes.map((n) => n.pos[0] + n.size[0]));
@@ -2541,6 +2939,7 @@ function buildTemplateGraph(spec, insert = false) {
     const specTop = Math.min(...spec.nodes.map((entry) => entry.pos[1]));
     offset = [right + 80 - left, top - specTop];
   } else {
+    leaveSubgraphs();
     graph.clear();
     outputPreviews.clear();
     comparePreviews.clear();
@@ -2563,7 +2962,7 @@ function buildTemplateGraph(spec, insert = false) {
   if (insert) {
     canvas.selectNodes([...nodes.values()]);
   } else {
-    markSaved("");
+    markSaved("", title);
   }
   updateEmptyState();
   fitView();
@@ -2576,7 +2975,7 @@ async function loadTemplate(file, title = file, insert = false) {
   try {
     const res = await fetch(`templates/${file}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    buildTemplateGraph(await res.json(), insert);
+    buildTemplateGraph(await res.json(), insert, title);
   } catch (err) {
     showToast(`Couldn't load the template: ${err.message}`, "error");
     return false;
@@ -2830,7 +3229,7 @@ function handleShortcut(e) {
   // Typing in a text field (node search, a dialog, litegraph's own prompt
   // box) keeps the browser's own Ctrl+Z etc. (F6).
   if (Logic.isTypingTarget(e.target)) return;
-  const action = Logic.shortcutFor(e);
+  const action = Logic.shortcutFor(e, loadShortcutOverrides());
   if (!action) return;
   const actions = {
     queue: () => queuePrompt({ count: queueCount() }),
@@ -2842,11 +3241,127 @@ function handleShortcut(e) {
     mute: () => toggleMode(selectedNodes(), Logic.MODE_MUTE),
     bypass: () => toggleMode(selectedNodes(), Logic.MODE_BYPASS),
     group: groupSelected,
-    help: () => openOverlay("help-overlay"),
-    escape: () => {},
+    pin: () => toggleNodeFlag(selectedNodes(), "pinned"),
+    collapse: () => toggleNodeFlag(selectedNodes(), "collapsed"),
+    fit: fitView,
+    "toggle-library": () => togglePanel("sidebar"),
+    "toggle-queue": () => togglePanel("rightpanel"),
+    settings: openSystemPanel,
+    help: openShortcutHelp,
+    escape: () => { if ((canvas._graph_stack || []).length) canvas.closeSubgraph(); },
   };
   e.preventDefault();
   actions[action]();
+}
+
+// Pin (P) and collapse (Alt+C), UI14: all on when any selected node is off, else all off, as
+// toggleMode does for mute and bypass.
+function toggleNodeFlag(nodes, flag) {
+  if (!nodes.length) return;
+  const on = !nodes.every((n) => n.flags && n.flags[flag]);
+  for (const node of nodes) {
+    if (!!(node.flags && node.flags[flag]) === on) continue;
+    if (flag === "pinned") node.pin(on);
+    else node.collapse(true);
+  }
+  canvas.setDirty(true, true);
+  scheduleHistoryPush();
+}
+
+// ---- Rebindable shortcuts (UI14): Logic.SHORTCUTS plus the user's keys, kept per browser ----
+
+const SHORTCUT_STORAGE_KEY = "pixelflow.shortcuts";
+
+function loadShortcutOverrides() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(SHORTCUT_STORAGE_KEY) || "{}");
+    return stored && typeof stored === "object" ? stored : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveShortcutOverrides(overrides) {
+  try {
+    if (Object.keys(overrides).length) localStorage.setItem(SHORTCUT_STORAGE_KEY, JSON.stringify(overrides));
+    else localStorage.removeItem(SHORTCUT_STORAGE_KEY);
+  } catch {
+    // Storage blocked (private window): the new key works until the page is reloaded.
+  }
+}
+
+// A table cell showing combos as keys: "Ctrl+Shift+Enter" -> Ctrl + Shift + Enter, each a <kbd>.
+function comboCell(combos) {
+  const cell = document.createElement("td");
+  if (!combos.length) {
+    cell.append(Object.assign(document.createElement("span"), { className: "hint", textContent: "none" }));
+  }
+  combos.forEach((combo, i) => {
+    if (i) cell.append(" / ");
+    combo.split(/\+(?=.)/).forEach((part, j) => {
+      if (j) cell.append("+");
+      cell.append(Object.assign(document.createElement("kbd"), { textContent: part }));
+    });
+  });
+  return cell;
+}
+
+function renderShortcutTable() {
+  const keys = Logic.shortcutKeys(loadShortcutOverrides());
+  const table = document.getElementById("shortcut-table");
+  table.replaceChildren();
+  const addRow = (combos, label, action) => {
+    const row = table.insertRow();
+    row.append(comboCell(combos), Object.assign(document.createElement("td"), { textContent: label }));
+    const last = row.insertCell();
+    if (!action) return;
+    const button = Object.assign(document.createElement("button"), { className: "shortcut-change", textContent: "Change" });
+    button.dataset.action = action;
+    button.setAttribute("aria-label", `Change the key for: ${label}`);
+    button.onclick = () => captureShortcut(button);
+    last.append(button);
+  };
+  for (const { action, label } of Logic.SHORTCUTS) addRow(keys[action], label, action);
+  addRow(["←", "→"], "Previous / next image in the viewer");
+  addRow(["Esc"], "Close a dialog or the image viewer");
+}
+
+// The next key pressed becomes the action's only key (taken from any action that had it);
+// Esc cancels, Backspace or Delete leaves the action without a key.
+function captureShortcut(button) {
+  const overlay = document.getElementById("help-overlay");
+  const message = document.getElementById("shortcut-message");
+  const action = button.dataset.action;
+  button.textContent = "Press a key…";
+  message.textContent = "Press the new key (Esc cancels, Backspace removes the key).";
+  function onKey(e) {
+    const combo = Logic.keyCombo(e);
+    if (!combo) return; // a modifier on its own: wait for the rest
+    e.preventDefault();
+    e.stopPropagation();
+    overlay.removeEventListener("keydown", onKey, true);
+    if (combo === "Escape") {
+      message.textContent = "";
+    } else {
+      const cleared = combo === "Backspace" || combo === "Delete";
+      const { overrides, takenFrom } = Logic.rebindShortcut(loadShortcutOverrides(), action, cleared ? null : combo);
+      saveShortcutOverrides(overrides);
+      const labels = Object.fromEntries(Logic.SHORTCUTS.map((s) => [s.action, s.label]));
+      message.textContent = takenFrom.length
+        ? `${combo} no longer does: ${takenFrom.map((a) => labels[a]).join("; ")}.`
+        : cleared ? "Key removed." : `${combo} set.`;
+    }
+    renderShortcutTable();
+    const again = overlay.querySelector(`.shortcut-change[data-action="${action}"]`);
+    if (again) again.focus();
+  }
+  overlay.addEventListener("keydown", onKey, true);
+}
+
+function openShortcutHelp() {
+  document.getElementById("shortcut-message").textContent = "";
+  renderShortcutTable();
+  openOverlay("help-overlay");
 }
 
 function queueCount() {
@@ -2948,10 +3463,12 @@ function initUI() {
   document.getElementById("xy-close").onclick = () => closeOverlay("xy-overlay");
   document.getElementById("btn-queue").onclick = (e) => queuePrompt({ front: e.shiftKey, count: queueCount() });
   document.getElementById("btn-example").onclick = loadExampleGraph;
+  document.getElementById("empty-load-example").onclick = loadExampleGraph;
   document.getElementById("btn-templates").onclick = openTemplates;
   document.getElementById("template-close").onclick = () => closeOverlay("template-overlay");
   document.getElementById("btn-clear").onclick = async () => {
     if (isDirty() && !(await confirmModal("Clear the graph?", "Your unsaved changes will be lost.", "Clear"))) return;
+    leaveSubgraphs();
     graph.clear();
     outputPreviews.clear();
     comparePreviews.clear();
@@ -2962,7 +3479,12 @@ function initUI() {
   document.getElementById("btn-undo").onclick = undo;
   document.getElementById("btn-redo").onclick = redo;
   document.getElementById("btn-fit-view").onclick = fitView;
-  document.getElementById("btn-help").onclick = () => openOverlay("help-overlay");
+  document.getElementById("btn-help").onclick = openShortcutHelp;
+  document.getElementById("shortcut-reset").onclick = () => {
+    saveShortcutOverrides({});
+    renderShortcutTable();
+    document.getElementById("shortcut-message").textContent = "All keys are back to their defaults.";
+  };
   document.getElementById("help-close").onclick = () => closeOverlay("help-overlay");
   const allWindows = document.getElementById("queue-all-windows");
   allWindows.checked = showAllWindows;
@@ -3023,6 +3545,18 @@ function initUI() {
   };
 
   document.addEventListener("keydown", handleShortcut);
+  document.getElementById("tab-nodes").onclick = () => showSidebarTab("nodes");
+  document.getElementById("tab-models").onclick = () => showSidebarTab("models");
+  for (const id of ["tab-nodes", "tab-models"]) {
+    document.getElementById(id).addEventListener("keydown", (e) => { // arrow keys move between tabs
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      const next = id === "tab-nodes" ? "models" : "nodes";
+      showSidebarTab(next);
+      document.getElementById(`tab-${next}`).focus();
+    });
+  }
+  document.getElementById("model-search").addEventListener("input", renderModelLibrary);
+  document.getElementById("model-refresh").onclick = loadModelLibrary;
 
   // Drops on the canvas: a palette node, a PNG with an embedded workflow,
   // or an image (uploaded and given a Load Image node). Capture phase +
@@ -3030,11 +3564,18 @@ function initUI() {
   const wrap = document.getElementById("canvas-wrap");
   wrap.addEventListener("dragover", (e) => {
     const types = [...(e.dataTransfer?.types || [])];
-    if (types.includes("Files") || types.includes("application/x-pixelflow-node")) e.preventDefault();
+    if (types.includes("Files") || types.includes("application/x-pixelflow-node") || types.includes(MODEL_MIME)) e.preventDefault();
   }, true);
   wrap.addEventListener("drop", async (e) => {
     const nodeName = e.dataTransfer?.getData("application/x-pixelflow-node");
     const pos = canvas.convertEventToCanvasOffset(e);
+    const modelData = e.dataTransfer?.getData(MODEL_MIME);
+    if (modelData) {
+      e.preventDefault();
+      e.stopPropagation();
+      try { addModelLoader(JSON.parse(modelData), pos); } catch (_) { /* not ours */ }
+      return;
+    }
     if (nodeName) {
       e.preventDefault();
       e.stopPropagation();
@@ -3122,6 +3663,21 @@ async function main() {
   const el = document.getElementById("graph-canvas");
   canvas = new LGraphCanvas(el, graph);
   canvas.show_info = false; // LiteGraph's debug corner (T/I/N/V/FPS) is for its developers (UI1)
+  for (const method of ["openSubgraph", "closeSubgraph"]) {
+    const native = canvas[method].bind(canvas);
+    canvas[method] = (...args) => { closePromptEditor(true); native(...args); updateSubgraphBar(); };
+  }
+  document.getElementById("subgraph-back").onclick = () => canvas.closeSubgraph();
+  // litegraph's own corner panels (Graph Inputs/Outputs) would cover the tab bar; the Input and
+  // Output nodes inside, and the bar above, do their job.
+  canvas.drawSubgraphPanel = () => {};
+  const subgraphMenu = LiteGraph.Subgraph.prototype.getExtraMenuOptions;
+  LiteGraph.Subgraph.prototype.getExtraMenuOptions = function (graphCanvas, options) {
+    const extra = [{ content: "Open subgraph (double-click)", callback: () => openSubgraph(this) }, null];
+    return extra.concat(subgraphMenu ? subgraphMenu.call(this, graphCanvas, options) || [] : []);
+  };
+  LiteGraph.Subgraph.prototype.onDblClick = function () { openSubgraph(this); };
+  el.addEventListener("wheel", promptWheel, { capture: true, passive: false });
   initCanvasToolbar();
   window.addEventListener("resize", resizeCanvas);
   new ResizeObserver(resizeCanvas).observe(document.getElementById("canvas-wrap"));

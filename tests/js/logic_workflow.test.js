@@ -196,7 +196,12 @@ test("workflow tabs: labels, ids, closing, storage (UI6)", () => {
   assert.equal(L.tabAfterClose([a, b, c], "t3"), "t2");
   assert.equal(L.tabAfterClose([a], "t1"), null);
   const stored = L.parseStoredTabs(L.storeTabs([a, { ...b, undoStack: ["x"] }], "t2"));
-  assert.deepEqual(stored, { active: "t2", tabs: [a, b] });
+  assert.deepEqual(stored, { active: "t2", tabs: [{ ...a, hint: "" }, { ...b, hint: "" }] });
+  // UI10: an unsaved graph is labelled by what it was loaded from, and the label survives a reload.
+  const fromTemplate = { ...b, hint: "Text to image" };
+  assert.equal(L.tabLabel(fromTemplate, true), "Text to image •");
+  assert.equal(L.tabLabel({ ...fromTemplate, name: "mine" }, false), "mine");
+  assert.equal(L.parseStoredTabs(L.storeTabs([fromTemplate], "t2")).tabs[0].hint, "Text to image");
   assert.equal(L.parseStoredTabs(L.storeTabs([a], "gone")).active, "t1");
   assert.equal(L.parseStoredTabs("not json"), null);
   assert.equal(L.parseStoredTabs(JSON.stringify({ tabs: [{ id: 3 }] })), null);
@@ -262,4 +267,109 @@ test("undo history is capped and skips duplicate snapshots (F6)", () => {
   [stack, index] = L.pushUndo(stack, 0, "branch", 3);
   assert.deepEqual(stack, ["s2", "branch"]);
   assert.equal(index, 1);
+});
+
+test("key combos, the new keys and rebinding (UI14)", () => {
+  assert.equal(L.keyCombo({ ctrlKey: true, shiftKey: true, key: "Enter" }), "Ctrl+Shift+Enter");
+  assert.equal(L.keyCombo({ shiftKey: true, key: "?" }), "?");  // Shift is part of the symbol
+  assert.equal(L.keyCombo({ altKey: true, key: "ç", code: "KeyC" }), "Alt+C");
+  assert.equal(L.keyCombo({ metaKey: true, key: "," }), "Ctrl+,");
+  assert.equal(L.keyCombo({ key: "Shift" }), null);
+  assert.equal(L.shortcutFor({ key: "p" }), "pin");
+  assert.equal(L.shortcutFor({ key: "." }), "fit");
+  assert.equal(L.shortcutFor({ altKey: true, key: "c", code: "KeyC" }), "collapse");
+  assert.equal(L.shortcutFor({ key: "n" }), "toggle-library");
+  assert.equal(L.shortcutFor({ key: "q" }), "toggle-queue");
+  assert.equal(L.shortcutFor({ key: "w" }), "open");
+  assert.equal(L.shortcutFor({ ctrlKey: true, key: "," }), "settings");
+  assert.equal(L.shortcutFor({ shiftKey: true, key: "P" }), null);
+  assert.equal(L.shortcutFor({ key: "Escape" }), "escape");
+
+  // The defaults never share a key.
+  assert.deepEqual(L.shortcutConflicts(L.shortcutKeys()), {});
+  // Giving P to "fit" takes it from "pin"; the old "." no longer fits.
+  const { overrides, takenFrom } = L.rebindShortcut({}, "fit", "P");
+  assert.deepEqual(takenFrom, ["pin"]);
+  assert.equal(L.shortcutFor({ key: "p" }, overrides), "fit");
+  assert.equal(L.shortcutFor({ key: "." }, overrides), null);
+  assert.deepEqual(L.shortcutKeys(overrides).pin, []);
+  assert.deepEqual(L.shortcutConflicts(L.shortcutKeys(overrides)), {});
+  assert.deepEqual(L.rebindShortcut(overrides, "fit", null).overrides.fit, []);
+  assert.deepEqual(L.shortcutKeys({ bogus: ["X"] }).pin, ["P"]);  // unknown actions are ignored
+});
+
+test("prompt boxes wrap, grow from 3 to 10 lines, then scroll (UI11)", () => {
+  const measure = (t) => t.length * 7;
+  assert.deepEqual(L.wrapPromptLines("a photo of a cat", 70, measure), ["a photo of", "a cat"]);
+  assert.deepEqual(L.wrapPromptLines("one\n\ntwo", 70, measure), ["one", "", "two"]);
+  assert.deepEqual(L.wrapPromptLines("abcdefghijklmnop", 70, measure), ["abcdefghij", "klmnop"]); // a word wider than the box
+  assert.deepEqual(L.wrapPromptLines("", 70, measure), [""]);
+  const box = L.PROMPT_BOX;
+  assert.equal(L.promptBoxHeight(1), L.promptBoxHeight(box.minLines));
+  assert.ok(L.promptBoxHeight(6) > L.promptBoxHeight(3));
+  assert.equal(L.promptBoxHeight(50), L.promptBoxHeight(box.maxLines));
+  assert.deepEqual(L.promptScroll(box.maxLines, 40), { max: 0, scroll: 0 });
+  assert.deepEqual(L.promptScroll(box.maxLines + 4, 999), { max: 4 * box.lineHeight, scroll: 4 * box.lineHeight });
+  assert.equal(L.promptScroll(box.maxLines + 4, -5).scroll, 0);
+});
+
+test("the model library filters by every word and names models without folders or extensions (UI13)", () => {
+  const library = {
+    loras: { label: "LoRAs", node: "LoraLoader", input: "lora_name", items: [{ name: "styles/Ink Wash.safetensors" }, { name: "pixel.pt" }] },
+    vae: { label: "VAEs", node: "LoadSplitModel", input: "vae", items: [{ name: "sdxl_vae.safetensors" }] },
+  };
+  assert.deepEqual(L.filterModelLibrary(library, "").map((g) => g.items.length), [2, 1]);
+  const found = L.filterModelLibrary(library, "ink WASH");
+  assert.deepEqual(found.map((g) => [g.kind, g.node, g.items.map((i) => i.name)]), [["loras", "LoraLoader", ["styles/Ink Wash.safetensors"]]]);
+  assert.deepEqual(L.filterModelLibrary(library, "nothing"), []);
+  assert.equal(L.modelDisplayName("styles/Ink Wash.safetensors"), "Ink Wash");
+  assert.equal(L.modelDisplayName("controlnet-canny"), "controlnet-canny");
+});
+
+test("subgraphs are inlined before /prompt, wires joined through their inputs and outputs (UI12)", () => {
+  const node = (id, comfyClass, inputs = [], outputs = [], extra = {}) =>
+    ({ id, mode: 0, kind: "node", comfyClass, properties: {}, inputs, outputs, ...extra });
+  // Inside the inner subgraph (node 20 of the outer one): input "img" -> Blur -> output "out".
+  const innerMost = {
+    nodes: [
+      { id: 1, kind: "input", name: "img", inputs: [], outputs: [{ type: "IMAGE" }] },
+      node(2, "Blur", [{ name: "image", type: "IMAGE", link: 1 }], [{ type: "IMAGE" }]),
+      { id: 3, kind: "output", name: "out", inputs: [{ name: "", type: "IMAGE", link: 2 }], outputs: [] },
+    ],
+    links: { 1: { origin_id: 1, origin_slot: 0 }, 2: { origin_id: 2, origin_slot: 0 } },
+  };
+  // The outer subgraph (node 7): input "image" -> nested subgraph 20 -> Resize -> output "result".
+  const outer = {
+    nodes: [
+      { id: 10, kind: "input", name: "image", inputs: [], outputs: [{ type: "IMAGE" }] },
+      { id: 20, kind: "subgraph", mode: 0, subgraph: innerMost, inputs: [{ name: "img", type: "IMAGE", link: 5 }],
+        outputs: [{ name: "out", type: "IMAGE" }] },
+      node(21, "ResizeImage", [{ name: "image", type: "IMAGE", link: 6 }], [{ type: "IMAGE" }]),
+      { id: 30, kind: "output", name: "result", inputs: [{ name: "", type: "IMAGE", link: 7 }], outputs: [] },
+    ],
+    links: { 5: { origin_id: 10, origin_slot: 0 }, 6: { origin_id: 20, origin_slot: 0 }, 7: { origin_id: 21, origin_slot: 0 } },
+  };
+  const root = {
+    nodes: [
+      node(1, "LoadImage", [], [{ type: "IMAGE" }]),
+      { id: 7, kind: "subgraph", mode: 0, subgraph: outer, inputs: [{ name: "image", type: "IMAGE", link: 100 }],
+        outputs: [{ name: "result", type: "IMAGE" }] },
+      node(8, "SaveImage", [{ name: "images", type: "IMAGE", link: 101 }]),
+    ],
+    links: { 100: { origin_id: 1, origin_slot: 0 }, 101: { origin_id: 7, origin_slot: 0 } },
+  };
+  const flat = L.flattenSubgraphs(root);
+  assert.deepEqual(flat.nodes.map((n) => n.id).sort(), ["1", "7:20:2", "7:21", "8"]);
+  const from = (id, input = 0) => {
+    const n = flat.nodes.find((x) => x.id === id);
+    return flat.links[n.inputs[input].link].origin_id;
+  };
+  assert.equal(from("7:20:2"), "1"); // LoadImage -> into two subgraphs -> Blur
+  assert.equal(from("7:21"), "7:20:2"); // Blur -> out of the inner subgraph -> Resize
+  assert.equal(from("8"), "7:21"); // Resize -> out of the outer subgraph -> Save
+
+  // A muted subgraph mutes everything inside it.
+  root.nodes[1].mode = L.MODE_MUTE;
+  assert.ok(L.flattenSubgraphs(root).nodes.filter((n) => n.id.startsWith("7:")).every((n) => n.mode === L.MODE_MUTE));
+  assert.deepEqual(L.uniqueNames(["image", "image", "", "model"]), ["image", "image 2", "value", "model"]);
 });

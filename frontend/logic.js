@@ -40,6 +40,150 @@
     return Math.min(Math.ceil(need), WIDGET_MAX_WIDTH);
   }
 
+  // ---- Multi-line prompt boxes on the node (UI11) ----
+
+  const PROMPT_BOX = { lineHeight: 16, padding: 6, minLines: 3, maxLines: 10, labelHeight: 14 };
+
+  /** `text` wrapped to `maxWidth` (as drawn: `measure(str)` gives the width): words move to the
+   *  next line, a word longer than a line is broken, and the text's own line breaks are kept. */
+  function wrapPromptLines(text, maxWidth, measure) {
+    const lines = [];
+    for (const paragraph of String(text ?? "").split("\n")) {
+      let line = "";
+      for (const word of paragraph.split(/(\s+)/)) {
+        if (!word) continue;
+        if (measure(line + word) <= maxWidth || !line.trim()) {
+          line += word;
+        } else {
+          lines.push(line.trimEnd());
+          line = word.trimStart();
+        }
+        while (measure(line) > maxWidth && line.length > 1) {  // one word wider than the box
+          let cut = line.length - 1;
+          while (cut > 1 && measure(line.slice(0, cut)) > maxWidth) cut--;
+          lines.push(line.slice(0, cut));
+          line = line.slice(cut);
+        }
+      }
+      lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+
+  /** The prompt box's height for `lineCount` wrapped lines: it grows with the text from
+   *  minLines to maxLines; past that it scrolls inside. Includes the label row above the box. */
+  function promptBoxHeight(lineCount, box = PROMPT_BOX) {
+    const shown = Math.min(box.maxLines, Math.max(box.minLines, lineCount));
+    return box.labelHeight + shown * box.lineHeight + 2 * box.padding;
+  }
+
+  /** How far (px) the box's text can scroll, and `scroll` kept inside that. */
+  function promptScroll(lineCount, scroll, box = PROMPT_BOX) {
+    const max = Math.max(0, (lineCount - box.maxLines) * box.lineHeight);
+    return { max, scroll: Math.min(max, Math.max(0, scroll || 0)) };
+  }
+
+  // ---- Subgraphs (UI12) ----
+
+  /**
+   * A graph with subgraphs, inlined into one flat graph for buildPrompt(): what /prompt gets.
+   * `graph` is {nodes, links}: nodes as buildPrompt takes them plus `kind` ("node", "subgraph",
+   * "input", "output"), `name` (an input/output node's name) and, on a subgraph node, `subgraph`
+   * (the same shape); links as {id: {origin_id, origin_slot}}. Inner nodes get ids prefixed with
+   * their subgraph node's ("7:3" is node 3 inside node 7); a wire into a subgraph input is joined
+   * to what feeds that input outside, a wire from a subgraph output to what its output node gets
+   * inside. A muted or bypassed subgraph node passes that mode to the nodes inside it.
+   */
+  function flattenSubgraphs(graph) {
+    const nodes = [];
+    const links = {};
+    let next = 0;
+    const link = (origin) => {
+      const id = `f${next++}`;
+      links[id] = { origin_id: origin.id, origin_slot: origin.slot };
+      return id;
+    };
+    function walk(g, prefix, feed, parentMode) {
+      const byId = new Map(g.nodes.map((n) => [String(n.id), n]));
+      const linkOf = (id) => (g.links instanceof Map ? g.links.get(id) : g.links[id]);
+      const children = new Map();
+      function child(node) {
+        if (!children.has(node.id)) {
+          children.set(node.id, null); // a cycle can't happen in a DAG; this just stops recursion
+          const inputFeed = (name) => {
+            const slot = (node.inputs || []).findIndex((inp) => inp.name === name);
+            return slot < 0 ? null : inputOrigin(node, slot);
+          };
+          const mode = parentMode || node.mode || 0;
+          children.set(node.id, walk(node.subgraph || { nodes: [], links: {} }, `${prefix}${node.id}:`, inputFeed, mode));
+        }
+        return children.get(node.id) || (() => null);
+      }
+      function origin(originId, slot) {
+        const node = byId.get(String(originId));
+        if (!node) return null;
+        if (node.kind === "input") return feed(node.name);
+        if (node.kind === "subgraph") return child(node)(((node.outputs || [])[slot] || {}).name);
+        return { id: `${prefix}${node.id}`, slot };
+      }
+      function inputOrigin(node, slot) {
+        const input = (node.inputs || [])[slot];
+        const found = input && input.link != null ? linkOf(input.link) : null;
+        return found ? origin(found.origin_id, found.origin_slot) : null;
+      }
+      for (const node of g.nodes) {
+        if (node.kind === "subgraph") { child(node); continue; }
+        if (node.kind === "input" || node.kind === "output") continue;
+        nodes.push({
+          ...node,
+          id: `${prefix}${node.id}`,
+          mode: parentMode || node.mode,
+          inputs: (node.inputs || []).map((inp, slot) => {
+            const from = inputOrigin(node, slot);
+            return { ...inp, link: from ? link(from) : null };
+          }),
+        });
+      }
+      return (name) => {
+        const out = g.nodes.find((n) => n.kind === "output" && n.name === name);
+        return out ? inputOrigin(out, 0) : null;
+      };
+    }
+    walk(graph, "", () => null, 0);
+    return { nodes, links };
+  }
+
+  /** Names for a new subgraph's inputs or outputs: `wanted`, made unique ("image", "image 2"). */
+  function uniqueNames(wanted) {
+    const seen = new Map();
+    return wanted.map((name) => {
+      const base = name || "value";
+      const count = (seen.get(base) || 0) + 1;
+      seen.set(base, count);
+      return count === 1 ? base : `${base} ${count}`;
+    });
+  }
+
+  // ---- Model Library panel (UI13) ----
+
+  /** GET /api/model-library's kinds, each with only the models whose name contains every word
+   *  of `query` (any case); kinds left empty are dropped. */
+  function filterModelLibrary(library, query) {
+    const words = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+    return Object.entries(library || {})
+      .map(([kind, group]) => ({
+        kind, ...group,
+        items: (group.items || []).filter((item) => words.every((w) => item.name.toLowerCase().includes(w))),
+      }))
+      .filter((group) => group.items.length);
+  }
+
+  /** A model's name without its folders and extension, for the card. */
+  function modelDisplayName(name) {
+    const base = String(name).split("/").pop();
+    return base.replace(/\.(safetensors|ckpt|pt|pth|bin|sft|gguf)$/i, "");
+  }
+
   /** How an INPUT_TYPES spec ([type, config]) is rendered on a node. */
   function widgetKind(spec) {
     const type = spec[0];
@@ -459,8 +603,10 @@
     return tabHasNodes(tab.graph) && tab.graph !== tab.saved;
   }
 
+  // A tab is named by its saved workflow, else by what it was loaded from (`hint`: a template's
+  // title or a file's name, UI10), else "Untitled".
   function tabLabel(tab, dirty) {
-    return `${tab.name || "Untitled"}${dirty ? " •" : ""}`;
+    return `${tab.name || tab.hint || "Untitled"}${dirty ? " •" : ""}`;
   }
 
   function newTabId(tabs) {
@@ -478,7 +624,7 @@
   }
 
   function storeTabs(tabs, active) {
-    return JSON.stringify({ active, tabs: tabs.map(({ id, name, graph, saved }) => ({ id, name, graph, saved })) });
+    return JSON.stringify({ active, tabs: tabs.map(({ id, name, hint, graph, saved }) => ({ id, name, hint, graph, saved })) });
   }
 
   // The tabs stored by storeTabs(), checked; null when there are none usable.
@@ -495,6 +641,7 @@
       .map((tab) => ({
         id: tab.id,
         name: typeof tab.name === "string" ? tab.name : "",
+        hint: typeof tab.hint === "string" ? tab.hint : "",
         graph: tab.graph,
         saved: typeof tab.saved === "string" ? tab.saved : null,
       }));
@@ -730,20 +877,98 @@
     return !!target.isContentEditable;
   }
 
-  /** The action for a keydown (or null): see the "?" overlay. */
-  function shortcutFor(e) {
-    const mod = e.ctrlKey || e.metaKey;
-    const key = (e.key || "").toLowerCase();
-    if (mod && key === "enter") return e.shiftKey ? "queue-front" : "queue";
-    if (mod && key === "z") return e.shiftKey ? "redo" : "undo";
-    if (mod && key === "y") return "redo";
-    if (mod && key === "s") return "save";
-    if (mod && key === "o") return "open";
-    if (mod && key === "m") return "mute";
-    if (mod && key === "b") return "bypass";
-    if (mod && key === "g") return "group";
-    if (!mod && !e.altKey && e.key === "?") return "help";
-    if (!mod && e.key === "Escape") return "escape";
+  /**
+   * Every rebindable shortcut (UI14): the action, its default keys and what it does. The key
+   * handler and the "?" overlay both read this, so the list can't drift from what the keys do.
+   * Keys are written as keyCombo() returns them; Esc and the viewer's arrows are fixed.
+   */
+  const SHORTCUTS = [
+    { action: "queue", keys: ["Ctrl+Enter"], label: "Queue the prompt" },
+    { action: "queue-front", keys: ["Ctrl+Shift+Enter"], label: "Queue it before everything pending" },
+    { action: "undo", keys: ["Ctrl+Z"], label: "Undo (nodes, links, moves, values)" },
+    { action: "redo", keys: ["Ctrl+Y", "Ctrl+Shift+Z"], label: "Redo" },
+    { action: "save", keys: ["Ctrl+S"], label: "Save the workflow" },
+    { action: "open", keys: ["Ctrl+O", "W"], label: "Open the workflow manager" },
+    { action: "mute", keys: ["Ctrl+M"], label: "Mute / unmute the selected nodes" },
+    { action: "bypass", keys: ["Ctrl+B"], label: "Bypass / un-bypass the selected nodes" },
+    { action: "group", keys: ["Ctrl+G"], label: "Group the selected nodes (right-click the group's title to edit it)" },
+    { action: "pin", keys: ["P"], label: "Pin / unpin the selected nodes (a pinned node can't be moved)" },
+    { action: "collapse", keys: ["Alt+C"], label: "Collapse / expand the selected nodes" },
+    { action: "fit", keys: ["."], label: "Fit the view to the graph" },
+    { action: "toggle-library", keys: ["N"], label: "Show / hide the node library" },
+    { action: "toggle-queue", keys: ["Q"], label: "Show / hide the queue and gallery" },
+    { action: "settings", keys: ["Ctrl+,"], label: "Open the System panel (models, downloads)" },
+    { action: "help", keys: ["?"], label: "This list (click a key to change it)" },
+  ];
+
+  const NAMED_KEYS = { " ": "Space", Esc: "Escape", Del: "Delete" };
+
+  /**
+   * A keydown as a combo string: "Ctrl+Shift+Enter", "Alt+C", "P", "?" (Cmd counts as Ctrl).
+   * Shift is left out for a printed symbol, which already says it ("?" is Shift+/); with Alt
+   * the physical letter is used, since Alt+C types "ç" on some layouts. Null for a lone modifier.
+   */
+  function keyCombo(e) {
+    let key = e.key || "";
+    if (["Control", "Shift", "Alt", "Meta", "AltGraph", "OS", ""].includes(key)) return null;
+    if (e.altKey && /^Key[A-Z]$/.test(e.code || "")) key = e.code.slice(3);
+    key = NAMED_KEYS[key] || key;
+    const printedSymbol = key.length === 1 && key.toLowerCase() === key.toUpperCase();
+    if (key.length === 1) key = key.toUpperCase();
+    const parts = [];
+    if (e.ctrlKey || e.metaKey) parts.push("Ctrl");
+    if (e.altKey) parts.push("Alt");
+    if (e.shiftKey && !printedSymbol) parts.push("Shift");
+    parts.push(key);
+    return parts.join("+");
+  }
+
+  /** The keys of each action: the defaults with `overrides` ({action: [combos]}) on top. */
+  function shortcutKeys(overrides = {}) {
+    const keys = {};
+    for (const { action, keys: defaults } of SHORTCUTS) {
+      keys[action] = Array.isArray(overrides[action]) ? overrides[action].slice() : defaults.slice();
+    }
+    return keys;
+  }
+
+  /** The actions that share a key, as {combo: [actions]} (empty when there are none). */
+  function shortcutConflicts(keys) {
+    const owners = {};
+    for (const [action, combos] of Object.entries(keys)) {
+      for (const combo of combos) (owners[combo] = owners[combo] || []).push(action);
+    }
+    return Object.fromEntries(Object.entries(owners).filter(([, actions]) => actions.length > 1));
+  }
+
+  /**
+   * `overrides` with `combo` given to `action` alone, so it stops doing whatever it did before;
+   * also returns the actions it was taken from. A null combo clears the action's keys.
+   */
+  function rebindShortcut(overrides, action, combo) {
+    const keys = shortcutKeys(overrides);
+    const takenFrom = [];
+    const next = { ...overrides };
+    if (combo) {
+      for (const [other, combos] of Object.entries(keys)) {
+        if (other !== action && combos.includes(combo)) {
+          next[other] = combos.filter((c) => c !== combo);
+          takenFrom.push(other);
+        }
+      }
+    }
+    next[action] = combo ? [combo] : [];
+    return { overrides: next, takenFrom };
+  }
+
+  /** The action for a keydown (or null), with the user's rebindings applied. */
+  function shortcutFor(e, overrides = {}) {
+    const combo = keyCombo(e);
+    if (!combo) return null;
+    if (combo === "Escape") return "escape";
+    for (const [action, combos] of Object.entries(shortcutKeys(overrides))) {
+      if (combos.includes(combo)) return action;
+    }
     return null;
   }
 
@@ -880,6 +1105,11 @@
     stepIndex,
     capItems,
     isTypingTarget,
+    SHORTCUTS,
+    keyCombo,
+    shortcutKeys,
+    shortcutConflicts,
+    rebindShortcut,
     shortcutFor,
     pushUndo,
     groupBounds,
@@ -889,6 +1119,14 @@
     firstImage,
     widgetDisplayValue,
     widgetFitWidth,
+    PROMPT_BOX,
+    flattenSubgraphs,
+    uniqueNames,
+    filterModelLibrary,
+    modelDisplayName,
+    wrapPromptLines,
+    promptBoxHeight,
+    promptScroll,
     WIDGET_MAX_WIDTH,
   };
 });

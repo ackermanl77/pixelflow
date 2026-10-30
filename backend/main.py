@@ -18,7 +18,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import contact_sheet, model_downloads, paths, plugins, update_check
+from . import contact_sheet, model_downloads, model_library, paths, plugins, update_check
 from .config import APP_ID, app_version, test_mode
 from .engine.graph import PromptValidationError, validate_prompt
 from .engine.queue import ConnectionManager, ExecutionQueue
@@ -513,6 +513,20 @@ def cancel_download(job_id: str):
     if not model_downloads.MANAGER.cancel(job_id):
         raise HTTPException(404, "No running download with that id")
     return {"cancelled": job_id}
+
+
+@app.get("/api/model-library")
+def get_model_library():
+    """The Model Library panel (UI13): installed models by kind, with size, preview and loader."""
+    return model_library.library()
+
+
+@app.get("/api/model-library/preview")
+def get_model_preview(kind: str = Query(...), name: str = Query(...)):
+    path = model_library.preview_path(kind, name)
+    if path is None:
+        raise HTTPException(404, "No preview image for that model")
+    return FileResponse(path, headers={"Cache-Control": "max-age=300"})
 
 
 @app.get("/api/models/{kind}")

@@ -56,11 +56,24 @@
   </div>
 
   <div id="main">
-    <aside id="sidebar" aria-label="Node library">
-      <h3>Node Library</h3>
-      <input id="node-search" type="text" placeholder="Search nodes..." autocomplete="off" aria-label="Search nodes" />
-      <div id="node-list"></div>
-      <div id="node-search-empty" class="hidden">No nodes match your search.</div>
+    <aside id="sidebar" aria-label="Node and model library">
+      <div class="sidebar-tabs" role="tablist" aria-label="Library">
+        <button type="button" role="tab" id="tab-nodes" aria-selected="true" aria-controls="sidebar-nodes">Nodes</button>
+        <button type="button" role="tab" id="tab-models" aria-selected="false" aria-controls="sidebar-models" tabindex="-1">Models</button>
+      </div>
+      <div id="sidebar-nodes" role="tabpanel" aria-labelledby="tab-nodes">
+        <h3>Node Library</h3>
+        <input id="node-search" type="text" placeholder="Search nodes..." autocomplete="off" aria-label="Search nodes" />
+        <div id="node-list"></div>
+        <div id="node-search-empty" class="hidden">No nodes match your search.</div>
+      </div>
+      <!-- Model Library (UI13): installed models; click or drag one onto the canvas for its loader. -->
+      <div id="sidebar-models" role="tabpanel" aria-labelledby="tab-models" hidden>
+        <h3>Model Library <button type="button" id="model-refresh" class="link-button" title="Look for new model files">Refresh</button></h3>
+        <input id="model-search" type="text" placeholder="Search models..." autocomplete="off" aria-label="Search models" />
+        <div id="model-list"></div>
+        <div id="model-list-empty" class="hidden"></div>
+      </div>
     </aside>
 
     <div class="splitter" data-panel="sidebar" role="separator" aria-orientation="vertical" tabindex="0"
@@ -86,6 +99,10 @@
         <div id="workflow-tab-list" role="tablist" aria-label="Open workflows"></div>
         <button id="btn-new-tab" type="button" title="New workflow tab" aria-label="New workflow tab">+</button>
       </div>
+      <div id="subgraph-bar" class="subgraph-bar hidden" role="navigation" aria-label="Subgraph">
+        <span id="subgraph-path"></span>
+        <button type="button" id="subgraph-back" title="Back to the graph around it (Esc)">← Back (Esc)</button>
+      </div>
       <canvas id="graph-canvas" aria-label="Node graph editor"></canvas>
       <canvas id="minimap" width="200" height="140" hidden aria-label="Minimap: click or drag to move the view"></canvas>
       <div id="canvas-toolbar" role="toolbar" aria-label="Canvas view">
@@ -98,7 +115,7 @@
       </div>
       <div id="empty-state">
         <p>Your graph is empty.</p>
-        <p>Drag a node from the library, right-click the canvas, drop an image or a PixelFlow PNG here, or click <strong>Load Example</strong>.</p>
+        <p>Drag a node from the library, right-click the canvas, drop an image or a PixelFlow PNG here, or <button type="button" id="empty-load-example" class="link-button">load the example</button>.</p>
       </div>
       <div id="progress-wrap" class="hidden">
         <img id="progress-preview" class="hidden" alt="Live preview of the image being sampled" />
@@ -259,21 +276,11 @@
   <div id="help-overlay" class="modal-overlay hidden">
     <div class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="help-title">
       <h3 id="help-title">Keyboard shortcuts</h3>
-      <table class="shortcuts">
-        <tr><td><kbd>Ctrl</kbd>+<kbd>Enter</kbd></td><td>Queue the prompt</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd></td><td>Queue it before everything pending</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Undo / redo (nodes, links, moves, values)</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Save the workflow</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>Open the workflow manager</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>M</kbd></td><td>Mute / unmute the selected nodes</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>B</kbd></td><td>Bypass / un-bypass the selected nodes</td></tr>
-        <tr><td><kbd>Ctrl</kbd>+<kbd>G</kbd></td><td>Group the selected nodes (right-click the group's title: mute / bypass group, edit, remove)</td></tr>
-        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous / next image in the viewer</td></tr>
-        <tr><td><kbd>Esc</kbd></td><td>Close a dialog or the image viewer</td></tr>
-        <tr><td><kbd>?</kbd></td><td>This list</td></tr>
-      </table>
-      <p class="hint">Shortcuts are ignored while you type in a text field.</p>
-      <div class="modal-actions"><button id="help-close" class="primary">Close</button></div>
+      <!-- Filled from Logic.SHORTCUTS by renderShortcutTable() (UI14). -->
+      <table class="shortcuts" id="shortcut-table"></table>
+      <p class="hint">Shortcuts are ignored while you type in a text field. Your keys are kept in this browser.</p>
+      <p id="shortcut-message" class="hint" aria-live="polite"></p>
+      <div class="modal-actions"><button id="shortcut-reset">Reset all keys</button> <button id="help-close" class="primary">Close</button></div>
     </div>
   </div>
 

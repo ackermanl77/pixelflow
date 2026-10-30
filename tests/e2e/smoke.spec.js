@@ -190,7 +190,8 @@ test("UI6: workflow tabs keep separate graphs, open saved workflows in a tab, su
   await expect(tabs).toHaveCount(1);
   await menuClick(page, "#btn-example");
   await expect.poll(nodeCount).toBe(5);
-  await expect(tabs.first()).toHaveText("Untitled"); // a template counts as unchanged until edited
+  // A template counts as unchanged until edited, and the tab takes its title until it's saved (UI10).
+  await expect(tabs.first()).toHaveText("Text to image");
   // Save it, then a new tab starts empty and the first keeps its graph.
   await menuClick(page, "#btn-save-workflow");
   await page.fill("#modal-overlay:not(.hidden) .modal-box input", "tab-test");

@@ -45,9 +45,15 @@ Either way, you get the same interface described below.
   Import…, Export JSON, Clear), **Edit** (Undo, Redo) and **View** (Fit View,
   Keyboard shortcuts). The menus work from the keyboard too (<kbd>↓</kbd> opens
   one, arrows move, <kbd>Esc</kbd> closes), and every shortcut still works.
-- **Node Library** (left) — every available node, grouped by category, with
-  a search box. Click one to drop it in the middle of the view, or drag it
-  onto the canvas where you want it. Hover for a one-line description.
+- **Node Library** (left, the **Nodes** tab) — every available node, grouped by
+  category, with a search box. Click one to drop it in the middle of the view,
+  or drag it onto the canvas where you want it. Hover for a one-line description.
+- **Model Library** (left, the **Models** tab) — your installed checkpoints,
+  LoRAs, VAEs and ControlNets, with their size and preview image (the
+  `<name>.preview.png`, `.png`, `.jpg` or `.webp` a model manager saves beside a
+  model). Click one, or drag it onto the canvas, for its loader with that model
+  already chosen (a VAE gets a Load Split Model). **Refresh** picks up files you
+  just added; the search box narrows the list.
 - **Canvas** (center) — where you build your graph. The small toolbar in its
   bottom-right corner zooms out (−) and in (+), shows the zoom (click it for
   100%), fits the whole graph in view (**Fit**), shows a **Map** of the graph
@@ -72,7 +78,11 @@ whole width, and brings it back. The layout is remembered in this browser.
    empty canvas space for litegraph's own "Add Node" menu.
 2. **Move it** — drag a node by its title bar.
 3. **Set its values** — each node shows its own widgets: numbers, text
-   boxes, dropdowns and on/off toggles.
+   boxes, dropdowns and on/off toggles. A prompt (any multi-line text) is a box
+   on the node showing the whole text, wrapped; it grows with the text up to 10
+   lines, then scrolls with the mouse wheel. Click it to type in place; click
+   elsewhere or press <kbd>Ctrl+Enter</kbd> to keep the text, <kbd>Esc</kbd> to
+   put the old text back.
 4. **Connect nodes** — inputs like an image, a model or a conditioning show
    as dots on a node's left edge. Drag from an output dot (right edge of the
    upstream node) to an input dot. Wires are coloured by type (image blue,
@@ -90,6 +100,16 @@ whole width, and brings it back. The layout is remembered in this browser.
    them together. Right-click the group's title for **Mute group**, **Bypass
    group**, **Select nodes**, and **Edit Group** (title, colour, remove).
    Groups are saved with the workflow.
+   **Subgraphs** go further: select some nodes, right-click one and choose
+   **Convert selection to subgraph**. They become one **Subgraph** node; the
+   wires that came in and went out become its inputs and outputs (named after
+   the inputs and outputs they connected). Double-click it (or right-click >
+   **Open subgraph**) to work inside it in place: a bar at the top says where
+   you are, and **← Back** or <kbd>Esc</kbd> returns. Inside, the **Input** and
+   **Output** nodes are its inputs and outputs. It runs exactly as the nodes did
+   before (they're put back in place when the graph is sent to run), a muted or
+   bypassed subgraph mutes or bypasses everything in it, and a subgraph can hold
+   another. Undo, saving and reloading keep it.
 8. **Reroute** (utils) — a small pass-through node: wire an output into it
    and its output on to one or more inputs, to tidy long wires.
 9. **Share one value** — right-click a node and pick **Convert <widget> to
@@ -452,7 +472,14 @@ the model, seed, sampler, steps, cfg and prompt, and offers:
 - **Fit View** recenters and rescales the canvas so your whole graph is
   visible.
 - **Scroll** to zoom; click-drag empty canvas space to pan.
-- **?** (or <kbd>?</kbd>) lists every keyboard shortcut.
+- **?** (or <kbd>?</kbd>) lists every keyboard shortcut. Each one can be
+  changed there (**Change**, then press the new key; a key another command had
+  moves over, and the list says what it no longer does) or put back with
+  **Reset all keys**; your keys are kept in this browser. Besides the menus'
+  keys: <kbd>P</kbd> pins the selected nodes, <kbd>Alt+C</kbd> collapses them,
+  <kbd>.</kbd> fits the view, <kbd>N</kbd> and <kbd>Q</kbd> show or hide the
+  library and the queue, <kbd>W</kbd> opens the workflows and
+  <kbd>Ctrl+,</kbd> the System panel.
 
 ## The System panel
 
