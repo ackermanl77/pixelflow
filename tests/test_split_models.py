@@ -23,9 +23,15 @@ def _write(path: Path, tensors: dict) -> Path:
 def test_split_names_round_trip():
     name = split_models.split_model_name("sub/z.safetensors", "qwen.safetensors", "ae.safetensors")
     assert split_models.parse_split_name(name) == ("sub/z.safetensors", "qwen.safetensors", "ae.safetensors")
+    flux_name = split_models.split_model_name("flux.safetensors", "clip_l.safetensors", "ae.safetensors", "t5xxl.safetensors")
+    assert split_models.parse_split_name(flux_name) == (
+        "flux.safetensors", "clip_l.safetensors", "t5xxl.safetensors", "ae.safetensors"
+    )
     assert split_models.parse_split_name("stabilityai/sd-turbo") is None
     with pytest.raises(ValueError):
         split_models.parse_split_name("split:only|two")
+    with pytest.raises(ValueError):
+        split_models.parse_split_name("split:diffusion|clip|t5|vae|extra")
 
 
 def test_the_family_comes_from_the_diffusion_models_keys(tmp_path):
@@ -33,16 +39,21 @@ def test_the_family_comes_from_the_diffusion_models_keys(tmp_path):
     model_type, family = split_models.detect_family(z_image)
     assert model_type == "z-image-turbo" and family.arch == models.ARCH_ZIMAGE and family.pipeline == "ZImagePipeline"
     other = _write(tmp_path / "other.safetensors", {"something.else.weight": torch.zeros(2)})
-    with pytest.raises(ValueError, match="supports z-image-turbo"):
+    with pytest.raises(ValueError, match="supports flux-dev, flux-schnell, z-image-turbo"):
         split_models.detect_family(other)
 
 
 def test_component_files_resolve_in_their_own_folders(isolated_data_dirs):
     _write(isolated_data_dirs["diffusion_models"] / "z.safetensors", {"model.diffusion_model.layers.0.adaLN_modulation.0.weight": torch.zeros(2)})
     _write(isolated_data_dirs["text_encoders"] / "te.safetensors", {"x": torch.zeros(1)})
+    _write(isolated_data_dirs["text_encoders"] / "t5.safetensors", {"x": torch.zeros(1)})
     _write(isolated_data_dirs["vae"] / "ae.safetensors", {"x": torch.zeros(1)})
     name = split_models.split_model_name("z.safetensors", "te.safetensors", "ae.safetensors")
     assert split_models.split_arch(name) == models.ARCH_ZIMAGE
+    flux_name = split_models.split_model_name("z.safetensors", "te.safetensors", "ae.safetensors", "t5.safetensors")
+    files = split_models.component_files(flux_name)
+    assert files["text_encoder"] == isolated_data_dirs["text_encoders"] / "te.safetensors"
+    assert files["text_encoder_2"] == isolated_data_dirs["text_encoders"] / "t5.safetensors"
     with pytest.raises(FileNotFoundError, match="models/vae"):
         split_models.component_files(split_models.split_model_name("z.safetensors", "te.safetensors", "missing.safetensors"))
     with pytest.raises(FileNotFoundError):  # one kind's file name never reads another kind's folder
@@ -68,6 +79,81 @@ def test_a_comfyui_text_encoder_file_loads_into_the_transformers_model(tmp_path)
     wrong = _write(tmp_path / "wrong.safetensors", {"model.embed_tokens.weight": torch.zeros(64, 32)})
     with pytest.raises(ValueError, match="doesn't fit"):
         split_models.load_text_encoder(wrong, family, tmp_path / "configs", torch.float32)
+
+
+def test_flux_pipeline_loads_generated_clip_and_t5_encoder_files(monkeypatch, tmp_path):
+    transformers = pytest.importorskip("transformers")
+    diffusers = pytest.importorskip("diffusers")
+    from diffusers import FlowMatchEulerDiscreteScheduler
+
+    config_dir = tmp_path / "configs"
+    clip_config_dir = config_dir / "text_encoder"
+    t5_config_dir = config_dir / "text_encoder_2"
+    clip_config_dir.mkdir(parents=True)
+    t5_config_dir.mkdir(parents=True)
+    clip_config = transformers.CLIPTextConfig(
+        vocab_size=64, hidden_size=32, intermediate_size=48, num_hidden_layers=2,
+        num_attention_heads=4, max_position_embeddings=16, bos_token_id=1, eos_token_id=2, pad_token_id=0,
+    )
+    t5_config = transformers.T5Config(
+        vocab_size=64, d_model=32, d_kv=8, d_ff=48, num_layers=2, num_heads=4,
+    )
+    clip_config.save_pretrained(clip_config_dir)
+    t5_config.save_pretrained(t5_config_dir)
+    torch.manual_seed(17)
+    clip_reference = transformers.CLIPTextModel(transformers.AutoConfig.from_pretrained(clip_config_dir)).eval()
+    t5_reference = transformers.T5EncoderModel(transformers.AutoConfig.from_pretrained(t5_config_dir)).eval()
+    clip_path = _write(
+        tmp_path / "clip.safetensors",
+        {f"text_model.{key}": value for key, value in clip_reference.state_dict().items()},
+    )
+    # Clone tied T5 weights so the generated safetensors fixture has independent entries.
+    t5_path = _write(tmp_path / "t5.safetensors", {key: value.clone() for key, value in t5_reference.state_dict().items()})
+    transformer_path = tmp_path / "flux.safetensors"
+    vae_path = tmp_path / "ae.safetensors"
+    files = {
+        "diffusion_models": transformer_path,
+        "text_encoder": clip_path,
+        "text_encoder_2": t5_path,
+        "vae": vae_path,
+    }
+    family = split_models.SPLIT_FAMILIES["flux-dev"]
+    monkeypatch.setattr(split_models, "component_files", lambda _name: files)
+    monkeypatch.setattr(split_models, "detect_family", lambda _path: ("flux-dev", family))
+    monkeypatch.setattr(split_models, "ensure_configs", lambda *_args, **_kwargs: config_dir)
+
+    (config_dir / "tokenizer").mkdir()
+    (config_dir / "tokenizer_2").mkdir()
+    (config_dir / "model_index.json").write_text(
+        json.dumps({"scheduler": ["diffusers", "FlowMatchEulerDiscreteScheduler"]}), encoding="utf-8"
+    )
+    FlowMatchEulerDiscreteScheduler(shift=3.0).save_pretrained(config_dir / "scheduler")
+
+    def fake_component(path, **_kwargs):
+        return f"loaded:{Path(path).name}"
+
+    monkeypatch.setattr(diffusers, "FluxTransformer2DModel", type("Loader", (), {"from_single_file": staticmethod(fake_component)}))
+    monkeypatch.setattr(diffusers, "AutoencoderKL", type("Loader", (), {"from_single_file": staticmethod(fake_component)}))
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda path: Path(path).name)
+    monkeypatch.setattr(diffusers, "FluxPipeline", lambda **kwargs: type("LoadedPipe", (), kwargs)())
+
+    pipe, class_name = split_models.load_split_pipeline(
+        split_models.split_model_name("flux.safetensors", "clip.safetensors", "ae.safetensors", "t5.safetensors"),
+        torch.float32,
+    )
+    assert class_name == "FluxPipeline"
+    assert pipe.transformer == "loaded:flux.safetensors" and pipe.vae == "loaded:ae.safetensors"
+    assert pipe.tokenizer == "tokenizer" and pipe.tokenizer_2 == "tokenizer_2"
+    assert isinstance(pipe.text_encoder, transformers.CLIPTextModel)
+    assert isinstance(pipe.text_encoder_2, transformers.T5EncoderModel)
+    for loaded, reference in ((pipe.text_encoder, clip_reference), (pipe.text_encoder_2, t5_reference)):
+        assert loaded.state_dict().keys() == reference.state_dict().keys()
+        assert all(torch.equal(value, reference.state_dict()[key]) for key, value in loaded.state_dict().items())
+    ids = torch.tensor([[1, 5, 9, 3]])
+    with torch.no_grad():
+        for encoder in (pipe.text_encoder, pipe.text_encoder_2):
+            output = encoder(ids).last_hidden_state
+            assert output.shape == (1, 4, 32) and torch.isfinite(output).all()
 
 
 def test_z_image_loads_in_bf16_by_default():
@@ -99,6 +185,7 @@ def test_the_node_loads_through_the_pipeline_cache(monkeypatch):
     assert asked == [("split:z.safetensors|qwen.safetensors|ae.safetensors", "auto")]
     assert model["pipeline"] == "PIPE" and model["arch"] == models.ARCH_ZIMAGE and model["name"] == "z.safetensors"
     assert io_nodes.LoadSplitModel.VALIDATE_INPUTS(diffusion_model=" ") != True  # noqa: E712
+    assert "text_encoder_2" in io_nodes.LoadSplitModel.INPUT_TYPES()["optional"]
 
 
 def test_the_cache_dispatches_split_names(monkeypatch):
